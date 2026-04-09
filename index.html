@@ -73,6 +73,31 @@
             align-items: center;
             gap: 8px;
         }
+        .header-left-spacer {
+            flex: 1;
+            min-width: 0;
+        }
+        .header-request-submit {
+            min-height: 40px;
+            padding: 0 14px;
+            border-radius: 999px;
+            border: none;
+            background: var(--primary);
+            color: #0a0a0a;
+            font-family: inherit;
+            font-weight: 900;
+            font-size: 14px;
+            letter-spacing: 0.02em;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            touch-action: manipulation;
+            -webkit-appearance: none;
+            appearance: none;
+        }
+        .header-request-submit:active { opacity: 0.8; }
+        .app-shell[data-tab="request"] .header-request-submit { display: inline-flex; }
         .profile-balance-row {
             display: flex;
             align-items: center;
@@ -269,9 +294,7 @@
         .app-shell[data-tab="home"] .header-icon-wrap {
             display: none;
         }
-        .app-shell[data-tab="request"] .header-request-title {
-            display: block;
-        }
+        .app-shell[data-tab="request"] .header-request-title { display: none; }
         .app-shell[data-tab="search"] .header-generic-title,
         .app-shell[data-tab="detail"] .header-generic-title,
         .app-shell[data-tab="dm"] .header-generic-title,
@@ -393,10 +416,16 @@
         /* コンテンツエリア */
         .content-section {
             display: none; /* 初期は非表示 */
-            padding: 0 calc(26px + env(safe-area-inset-right, 0px)) 0 calc(26px + env(safe-area-inset-left, 0px));
+            padding: 0 calc(16px + env(safe-area-inset-right, 0px)) 0 calc(16px + env(safe-area-inset-left, 0px));
             animation: fadeIn 0.3s ease;
             flex: 1 1 auto;
             min-height: 0;
+        }
+        /* Profile screens: wider side padding (card-ish) */
+        #account.content-section,
+        #organizer.content-section {
+            padding-left: calc(26px + env(safe-area-inset-left, 0px));
+            padding-right: calc(26px + env(safe-area-inset-right, 0px));
         }
         .content-section.active {
             display: flex;
@@ -802,10 +831,11 @@
             gap: 10px;
             align-items: center;
             background: transparent;
-            border: 1px solid rgba(255, 255, 255, 0.10);
-            border-radius: 12px;
-            padding: 10px 12px;
-            min-height: 52px;
+            border: none;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.14);
+            border-radius: 0;
+            padding: 10px 0;
+            min-height: 48px;
         }
         #request .field .ic {
             opacity: 0.9;
@@ -959,10 +989,13 @@
         .bottom-nav {
             position: fixed;
             bottom: 0;
-            left: 50%;
-            transform: translateX(-50%);
+            left: 0;
+            right: 0;
+            transform: none;
             width: 100%;
             max-width: var(--app-max);
+            margin-left: auto;
+            margin-right: auto;
             min-height: calc(var(--nav-h) + env(safe-area-inset-bottom, 0px));
             padding: 8px 8px calc(8px + env(safe-area-inset-bottom, 0px));
             background: rgba(0, 0, 0, 0.72);
@@ -1384,7 +1417,7 @@
                     <circle cx="16" cy="18" r="2" stroke="currentColor" stroke-width="2"/>
                 </svg>
             </button>
-            <div style="width:44px;height:44px;" aria-hidden="true"></div>
+            <div class="header-left-spacer" aria-hidden="true"></div>
         </div>
         <div class="header-main">
             <div class="header-home-dot" aria-hidden="true"></div>
@@ -1416,6 +1449,7 @@
                     <path d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
                 </svg>
             </button>
+            <button type="button" class="header-request-submit" id="requestHeaderSubmit" aria-label="依頼を送る">依頼</button>
         </div>
     </div>
     <div id="request" class="content-section">
@@ -1463,24 +1497,8 @@
                         </div>
                     </div>
 
-                    <details class="req-details">
-                        <summary>画像（任意）</summary>
-                        <div style="margin-top: 12px;">
-                            <div class="upload-block">
-                                <label class="upload-zone" id="uploadZone" for="req-photo">
-                                    <input type="file" id="req-photo" name="photo" class="upload-input" accept="image/*">
-                                    <span class="upload-zone-inner">
-                                        <span class="upload-icon" aria-hidden="true">📷</span>
-                                        <span class="upload-hint">タップして追加（任意）</span>
-                                        <img class="upload-preview" id="uploadPreview" alt="選択した写真のプレビュー">
-                                    </span>
-                                </label>
-                            </div>
-                        </div>
-                    </details>
                 </div>
 
-                <button type="submit" class="submit-btn">依頼を送る</button>
             </div>
         </form>
     </div>
@@ -2214,29 +2232,6 @@
         }
 
         (function () {
-            // Photo upload preview (request)
-            var input = document.getElementById('req-photo');
-            var zone = document.getElementById('uploadZone');
-            var preview = document.getElementById('uploadPreview');
-            if (input && zone && preview) {
-                var prevUrl = null;
-                input.addEventListener('change', function () {
-                    var file = input.files && input.files[0];
-                    if (prevUrl) {
-                        URL.revokeObjectURL(prevUrl);
-                        prevUrl = null;
-                    }
-                    if (file && file.type.indexOf('image/') === 0) {
-                        prevUrl = URL.createObjectURL(file);
-                        preview.src = prevUrl;
-                        zone.classList.add('has-image');
-                    } else {
-                        preview.removeAttribute('src');
-                        zone.classList.remove('has-image');
-                    }
-                });
-            }
-
             // Request lightweight helpers
             var requestForm = document.getElementById('requestForm');
             if (requestForm) {
@@ -2244,6 +2239,16 @@
                     e.preventDefault();
                     showToast('依頼を送信しました（デモ）');
                     showSection('home', null);
+                });
+            }
+            var requestHeaderSubmit = document.getElementById('requestHeaderSubmit');
+            if (requestHeaderSubmit && requestForm) {
+                requestHeaderSubmit.addEventListener('click', function () {
+                    if (typeof requestForm.requestSubmit === 'function') {
+                        requestForm.requestSubmit();
+                    } else {
+                        requestForm.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+                    }
                 });
             }
 
