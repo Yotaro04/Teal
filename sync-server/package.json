@@ -1,0 +1,14 @@
+{
+  "name": "tealfolder-sync",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Minimal shared state for TealFolder demo (user vols + notifications)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.21.2"
+  }
+}
