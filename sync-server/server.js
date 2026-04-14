@@ -7,7 +7,7 @@
  * ブラウザ: http://127.0.0.1:3847/index.html?sync=auto
  * 別端末: 同じLANの IP で上記を開く（例: http://192.168.1.10:3847/index.html?sync=auto）
  *
- * 同期対象: vol-user-* の募集 JSON、参加申請通知の配列
+ * 同期対象: vol-user-* の募集 JSON、参加申請・ありがとう付与などの通知配列
  * 非対象: デモの vol-1〜、DMスレッド（まだローカルのみ）
  */
 

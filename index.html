@@ -1480,6 +1480,31 @@
         .detail-page-actions .btn.btn-danger:active {
             opacity: 0.88;
         }
+        .detail-host-day {
+            margin-top: 18px;
+            padding: 14px 14px 16px;
+            border-radius: 18px;
+            background: rgba(66, 230, 210, 0.07);
+            border: 1px solid var(--stroke);
+        }
+        .detail-host-day-title {
+            font-weight: 950;
+            font-size: 0.98rem;
+            letter-spacing: 0.02em;
+        }
+        .detail-host-day-text {
+            margin-top: 8px;
+            color: var(--text-sub);
+            font-size: 0.88rem;
+            line-height: 1.55;
+        }
+        .detail-host-day .btn {
+            width: 100%;
+            margin-top: 12px;
+            min-height: 48px;
+            border-radius: 16px;
+            font-weight: 900;
+        }
         .detail-meta--place {
             white-space: normal;
             flex: 1 1 100%;
@@ -2071,6 +2096,11 @@
             <div class="detail-page-actions" id="detailOwnerActions" hidden role="group" aria-label="依頼の管理">
                 <button type="button" class="btn btn-danger" id="detailDeleteVolBtn">依頼を削除</button>
             </div>
+            <div class="detail-host-day" id="detailHostThanksBlock" hidden>
+                <div class="detail-host-day-title">ボランティア当日</div>
+                <p class="detail-host-day-text">活動が終わったら、承認済みの参加者へ「ありがとう」を送ってください。相手のありがとうが増え、通知でも届きます（お試し）。</p>
+                <button type="button" class="btn btn-primary" id="detailHostThanksBtn">ありがとうを送る（ありがとう付与）</button>
+            </div>
         </div>
     </div>
     <div id="dm" class="content-section">
@@ -2089,7 +2119,7 @@
     <div class="modal" id="joinModal" role="dialog" aria-modal="true" aria-labelledby="joinModalTitle">
         <div class="modal-sheet">
             <div class="modal-title" id="joinModalTitle">参加しますか？</div>
-            <div class="modal-text" id="joinModalText">このボランティアに参加リクエストを送ります（お試し）。参加履歴に残り、続けて主催者へお礼のメッセージを送れます。</div>
+            <div class="modal-text" id="joinModalText">募集者へ参加申請を送ります（お試し）。参加履歴に残り、募集者の承認後に通知でお知らせします。当日のあと、募集者から「ありがとう」が届くとあなたのありがとうが増えます。</div>
             <div class="modal-actions">
                 <button type="button" class="btn" id="joinCancel">キャンセル</button>
                 <button type="button" class="btn btn-primary" id="joinConfirm">参加する</button>
@@ -2098,8 +2128,8 @@
     </div>
     <div class="modal" id="thankOrganizerModal" role="dialog" aria-modal="true" aria-labelledby="thankOrganizerModalTitle">
         <div class="modal-sheet">
-            <div class="modal-title" id="thankOrganizerModalTitle">主催者にお礼を送る</div>
-            <div class="modal-text">参加のお礼として、主催者宛のDMに送信されます（お試し）。文章は編集できます。</div>
+            <div class="modal-title" id="thankOrganizerModalTitle">募集者にお礼を送る</div>
+            <div class="modal-text">参加のお礼として、募集者宛のDMに送信されます（お試し）。文章は編集できます。</div>
             <label class="sr-only" for="thankOrganizerText">お礼メッセージ</label>
             <textarea id="thankOrganizerText" class="modal-textarea" maxlength="500" placeholder="お礼のメッセージ" autocomplete="off"></textarea>
             <div class="modal-actions">
@@ -2276,6 +2306,94 @@
             return !!(state.myHostedVolIds && state.myHostedVolIds[v.id]);
         }
 
+        function getApprovedJoinNotificationsForVol(volId) {
+            var me = syncAccountNameFromDom();
+            return (state.notifications || []).filter(function (n) {
+                return n && n.type === 'join_request' && n.volId === volId
+                    && (n.joinStatus != null ? n.joinStatus : 'pending') === 'approved'
+                    && accountsMatch(n.organizerName, me);
+            });
+        }
+
+        function updateDetailVolunteerDayUI() {
+            var block = document.getElementById('detailHostThanksBlock');
+            var btn = document.getElementById('detailHostThanksBtn');
+            if (!block || !btn) return;
+            var vid = state.currentDetailId;
+            var v = vid && state.vols[vid];
+            var own = !!(v && isOwnVol(v));
+            if (!own) {
+                block.hidden = true;
+                return;
+            }
+            var approved = getApprovedJoinNotificationsForVol(vid);
+            if (!approved.length) {
+                block.hidden = true;
+                return;
+            }
+            block.hidden = false;
+            var pending = approved.filter(function (n) { return !n.thanksGranted; });
+            btn.disabled = !pending.length;
+            btn.textContent = pending.length ? 'ありがとうを送る（ありがとう付与）' : 'ありがとう送信済み';
+        }
+
+        function consumeThanksGrantedForMe() {
+            var me = syncAccountNameFromDom();
+            if (!me) return;
+            if (!state.consumedThanksNotifIds) state.consumedThanksNotifIds = {};
+            var bumped = false;
+            (state.notifications || []).forEach(function (n) {
+                if (!n || n.type !== 'thanks_granted' || !accountsMatch(n.applicantName, me)) return;
+                if (state.consumedThanksNotifIds[n.id]) return;
+                state.consumedThanksNotifIds[n.id] = true;
+                state.profile.thanksCount = (state.profile.thanksCount || 0) + 1;
+                bumped = true;
+            });
+            if (bumped) renderAccount();
+        }
+
+        function grantThanksForCurrentVolFromHost() {
+            var vid = state.currentDetailId;
+            var v = vid && state.vols[vid];
+            if (!v || !isOwnVol(v)) return;
+            var me = syncAccountNameFromDom();
+            var pendingList = getApprovedJoinNotificationsForVol(vid).filter(function (n) { return !n.thanksGranted; });
+            if (!pendingList.length) return;
+            var applicantsDone = {};
+            var dmDone = {};
+            var tick = Date.now();
+            pendingList.forEach(function (n, idx) {
+                n.thanksGranted = true;
+                liveSyncPatchNotification(n.id, { thanksGranted: true });
+                var app = normalizeDisplayName(n.applicantName || '参加者') || '参加者';
+                if (!applicantsDone[app]) {
+                    applicantsDone[app] = true;
+                    var tgN = {
+                        id: 'notif-thanks-' + tick + '-' + idx + '-' + Math.random().toString(36).slice(2, 7),
+                        type: 'thanks_granted',
+                        at: '今',
+                        organizerName: me,
+                        applicantName: app,
+                        volTitle: n.volTitle || v.title || '',
+                        volId: vid
+                    };
+                    liveSyncPostNotification(tgN);
+                    state.notifications.unshift(tgN);
+                }
+                if (!dmDone[app]) {
+                    dmDone[app] = true;
+                    var th = ensureThread(app);
+                    th.messages.push({ me: true, text: '当日はありがとうございました。とても助かりました（お試し）。' });
+                    th.lastAt = '今';
+                }
+            });
+            setUnreadFlag();
+            renderDmThreads();
+            renderNotifications();
+            updateDetailVolunteerDayUI();
+            showToast('ありがとうを送り、参加者に付与しました（お試し）。');
+        }
+
         function syncDetailActionBars() {
             var vid = state.currentDetailId;
             var v = vid && state.vols[vid];
@@ -2290,6 +2408,7 @@
                 ownBar.hidden = !own;
                 ownBar.style.display = own ? 'flex' : 'none';
             }
+            updateDetailVolunteerDayUI();
         }
 
         var liveSyncConnectedOnce = false;
@@ -2607,10 +2726,12 @@
             var wrap = document.getElementById('notificationList');
             if (!wrap) return;
             wrap.innerHTML = '';
+            consumeThanksGrantedForMe();
             var me = syncAccountNameFromDom();
             var rawList = state.notifications || [];
             var list = rawList.filter(function (n) {
                 if (!n) return false;
+                if (n.type === 'thanks_granted') return accountsMatch(n.applicantName, me);
                 if (n.type !== 'join_request') return true;
                 return accountsMatch(n.organizerName, me) || accountsMatch(n.applicantName, me);
             });
@@ -2622,12 +2743,52 @@
                 empty.style.fontSize = '0.92rem';
                 empty.style.padding = '18px 14px';
                 empty.style.lineHeight = '1.55';
-                empty.textContent = '通知はまだありません。参加申請があると、承認後にDMで連絡できます（お試し）。';
+                empty.textContent = '通知はまだありません。参加申請が届くと募集者に表示され、承認すると参加者へ承認として届きます。当日のあと、募集者からありがとうが届くと参加者のありがとうが増えます（お試し）。';
                 wrap.appendChild(empty);
                 updateNotifBadge();
                 return;
             }
             list.forEach(function (n) {
+                if (n.type === 'thanks_granted') {
+                    var tgRow = document.createElement('div');
+                    tgRow.className = 'notif-row';
+                    var tgTop = document.createElement('div');
+                    tgTop.className = 'notif-row-top';
+                    var tgTy = document.createElement('span');
+                    tgTy.className = 'notif-type';
+                    tgTy.textContent = 'ありがとう';
+                    var tgAt = document.createElement('span');
+                    tgAt.className = 'notif-at';
+                    tgAt.textContent = n.at || '';
+                    tgTop.appendChild(tgTy);
+                    tgTop.appendChild(tgAt);
+                    var tgTit = document.createElement('div');
+                    tgTit.className = 'notif-title';
+                    tgTit.textContent = '募集者からありがとうが届きました';
+                    var tgBody = document.createElement('div');
+                    tgBody.className = 'notif-body';
+                    tgBody.textContent = '「' + (n.volTitle || '募集') + '」';
+                    var tgMeta = document.createElement('div');
+                    tgMeta.className = 'notif-meta';
+                    tgMeta.textContent = 'ありがとうが1つ付与されました（お試し）。';
+                    tgRow.appendChild(tgTop);
+                    tgRow.appendChild(tgTit);
+                    tgRow.appendChild(tgBody);
+                    tgRow.appendChild(tgMeta);
+                    var tgBtn = document.createElement('button');
+                    tgBtn.type = 'button';
+                    tgBtn.className = 'btn btn-notif-ghost';
+                    tgBtn.style.marginTop = '10px';
+                    tgBtn.textContent = '募集を見る';
+                    tgBtn.addEventListener('click', function (e) {
+                        e.stopPropagation();
+                        if (n.volId) openDetail(n.volId);
+                    });
+                    tgRow.appendChild(tgBtn);
+                    wrap.appendChild(tgRow);
+                    return;
+                }
+
                 var isHost = n.type === 'join_request' && accountsMatch(n.organizerName, me);
                 var isApplicant = n.type === 'join_request' && accountsMatch(n.applicantName, me);
                 var row = document.createElement('div');
@@ -2638,7 +2799,9 @@
                 top.className = 'notif-row-top';
                 var ty = document.createElement('span');
                 ty.className = 'notif-type';
-                ty.textContent = n.type === 'join_request' ? '参加申請' : 'お知らせ';
+                var tyLabel = '参加申請';
+                if (joinSt === 'approved' && isApplicant && !isHost) tyLabel = '承認';
+                ty.textContent = tyLabel;
                 var at = document.createElement('span');
                 at.className = 'notif-at';
                 at.textContent = n.at || '';
@@ -2647,7 +2810,9 @@
                 var tit = document.createElement('div');
                 tit.className = 'notif-title';
                 if (n.type === 'join_request' && isApplicant && !isHost) {
-                    tit.textContent = '「' + (n.volTitle || '募集') + '」に参加を申請しました';
+                    tit.textContent = joinSt === 'approved'
+                        ? ('「' + (n.volTitle || '募集') + '」の参加が承認されました')
+                        : ('「' + (n.volTitle || '募集') + '」に参加を申請しました');
                 } else {
                     tit.textContent = (n.applicantName || '参加者') + 'さんが参加を希望しています';
                 }
@@ -2658,13 +2823,18 @@
                 meta.className = 'notif-meta';
                 if (n.type === 'join_request') {
                     if (joinSt === 'approved') {
-                        meta.textContent = isHost
-                            ? ('承認済み。DMで参加者（' + (n.applicantName || '') + '）に連絡できます。')
-                            : ('承認されました。主催者（' + (n.organizerName || '') + '）へDMで連絡できます。');
+                        if (isHost) {
+                            meta.textContent = n.thanksGranted
+                                ? ('ありがとう送信済み。DMで参加者（' + (n.applicantName || '') + '）とやりとりできます。')
+                                : ('承認済み。当日は募集詳細の「ボランティア当日」からありがとうを送れます。DMで参加者（' + (n.applicantName || '') + '）に連絡できます。');
+                        } else {
+                            meta.textContent = '承認されました。募集者（' + (n.organizerName || '') + '）へDMで連絡できます。'
+                                + (n.thanksGranted ? ' 当日のお礼のありがとうも届いています。' : ' 当日のあと、募集者からありがとうが届きます。');
+                        }
                     } else if (isHost) {
-                        meta.textContent = '承認すると、参加者（' + (n.applicantName || '') + '）へDMで進められます（お試し）。';
+                        meta.textContent = '承認すると、参加者（' + (n.applicantName || '') + '）へ承認の通知とDMで進められます（お試し）。';
                     } else if (isApplicant) {
-                        meta.textContent = '主催者の承認をお待ちください。';
+                        meta.textContent = '募集者の承認をお待ちください。';
                     } else {
                         meta.textContent = '';
                     }
@@ -2691,7 +2861,8 @@
                                 liveSyncPatchNotification(n.id, { joinStatus: 'approved' });
                                 updateNotifBadge();
                                 renderNotifications();
-                                showToast('承認しました。DMで連絡できます。');
+                                syncDetailActionBars();
+                                showToast('承認しました。参加者に承認通知が届きます（お試し）。');
                             });
                             var btnView = document.createElement('button');
                             btnView.type = 'button';
@@ -2715,7 +2886,7 @@
                             actions.appendChild(btnViewOnly);
                         }
                     } else {
-                        var dmTarget = isHost ? (n.applicantName || '参加者') : (n.organizerName || '主催者');
+                        var dmTarget = isHost ? (n.applicantName || '参加者') : (n.organizerName || '募集者');
                         var btnDm = document.createElement('button');
                         btnDm.type = 'button';
                         btnDm.className = 'btn btn-primary';
@@ -3049,7 +3220,7 @@
             state.pendingThankOrganizer = '';
         }
         function openThankOrganizerModal(organizerName, volTitle) {
-            var org = String(organizerName || '主催者').trim() || '主催者';
+            var org = String(organizerName || '募集者').trim() || '募集者';
             var title = String(volTitle || 'この募集').trim() || 'この募集';
             state.pendingThankOrganizer = org;
             var ta = document.getElementById('thankOrganizerText');
@@ -3090,14 +3261,14 @@
                 closeJoinModal();
                 return;
             }
-            var organizerName = v.chatWith || '主催者';
+            var organizerName = v.chatWith || '募集者';
             var volTitle = v.title || '';
             state.history.unshift({ title: v.title, meta: '2026年4月 · ' + v.place + ' · 参加申請（お試し）' });
             renderAccount();
             var th = ensureThread(organizerName);
             th.unread = true;
             th.lastAt = '今';
-            th.messages.push({ me: false, text: '参加申請ありがとうございます！当日の流れを共有します（お試し）。' });
+            th.messages.push({ me: false, text: '参加申請ありがとうございます！承認後に当日の流れを共有します（お試し）。' });
             setUnreadFlag();
             renderDmThreads();
             var applicant = state.profile.name || '参加者';
@@ -3116,10 +3287,7 @@
             updateNotifBadge();
             renderNotifications();
             closeJoinModal();
-            showToast('参加申請しました。主催者に通知が届きます（お試し）。');
-            window.setTimeout(function () {
-                openThankOrganizerModal(organizerName, volTitle);
-            }, 120);
+            showToast('参加申請しました。募集者に参加申請通知が届きます（お試し）。');
         }
 
         (function () {
@@ -3511,6 +3679,9 @@
             if (joinModal) joinModal.addEventListener('click', function (e) {
                 if (e.target === joinModal) closeJoinModal();
             });
+
+            var detailHostThanksBtn = document.getElementById('detailHostThanksBtn');
+            if (detailHostThanksBtn) detailHostThanksBtn.addEventListener('click', grantThanksForCurrentVolFromHost);
 
             var thankOrganizerModal = document.getElementById('thankOrganizerModal');
             var thankOrganizerSkip = document.getElementById('thankOrganizerSkip');
