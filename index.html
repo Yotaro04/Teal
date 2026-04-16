@@ -385,7 +385,8 @@
             line-height: 1;
             box-shadow: none;
         }
-        #account .account-avatar.account-avatar--photo {
+        #account .account-avatar.account-avatar--photo,
+        #organizer .account-avatar.account-avatar--photo {
             font-size: 0;
             background-color: #1a1a1a;
             background-size: cover;
@@ -422,9 +423,6 @@
             resize: vertical;
             min-height: 88px;
             line-height: 1.5;
-        }
-        .profile-edit-input.profile-edit-emoji {
-            max-width: 140px;
         }
         .profile-edit-file {
             display: block;
@@ -750,6 +748,12 @@
             justify-content: center;
             flex: 0 0 auto;
             overflow: hidden;
+        }
+        .req-icon-photo {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            display: block;
         }
         .req-icon span { font-size: 18px; line-height: 1; }
         .req-title {
@@ -1639,9 +1643,6 @@
             background-position: center;
             margin-bottom: 2px;
         }
-        .detail-cover--empty {
-            background-image: linear-gradient(135deg, rgba(66, 230, 210, 0.28), rgba(66, 230, 210, 0.06)), linear-gradient(160deg, rgba(0, 0, 0, 0.35) 0%, rgba(255, 255, 255, 0.04) 100%);
-        }
         .detail-organizer-row {
             display: flex;
             align-items: center;
@@ -1660,6 +1661,13 @@
             flex-shrink: 0;
             font-size: 20px;
             line-height: 1;
+        }
+        .detail-organizer-ic.detail-organizer-ic--photo {
+            font-size: 0;
+            background-color: #1a1a1a;
+            background-size: cover;
+            background-position: center;
+            background-repeat: no-repeat;
         }
         .detail-organizer-ic span { font-size: 20px; line-height: 1; }
         .detail-organizer-name {
@@ -1841,13 +1849,21 @@
         .dm-avatar {
             width: 44px;
             height: 44px;
-            border-radius: 14px;
+            border-radius: 999px;
             background: #2a2a2a;
             display: flex;
             align-items: center;
             justify-content: center;
             font-weight: 800;
             color: #e8e8e8;
+            cursor: pointer;
+            overflow: hidden;
+        }
+        .dm-avatar-img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            display: block;
         }
         .dm-meta {
             min-width: 0;
@@ -1960,6 +1976,23 @@
             appearance: none;
         }
         .chat-send:active { background: var(--accent); }
+        .chat-thanks-send {
+            min-width: 86px;
+            min-height: 48px;
+            padding: 0 12px;
+            border-radius: 14px;
+            border: none;
+            background: rgba(255, 255, 255, 0.1);
+            color: var(--text-main);
+            font-weight: 800;
+            font-size: 13px;
+            letter-spacing: 0.01em;
+            cursor: pointer;
+            touch-action: manipulation;
+            -webkit-appearance: none;
+            appearance: none;
+        }
+        .chat-thanks-send:active { opacity: 0.85; }
 
         /* Home floating request button (XのPost風) */
         .request-fab {
@@ -2235,7 +2268,7 @@
     </div>
     <div id="detail" class="content-section">
         <div class="card detail-page-card">
-            <div id="detailCover" class="detail-cover detail-cover--empty" aria-hidden="true"></div>
+            <div id="detailCover" class="detail-cover" aria-hidden="true" hidden></div>
             <div style="font-weight: 950; font-size: 1.12rem; margin-top: 14px; line-height: 1.3;" id="detailTitle"></div>
             <div class="detail-organizer-row">
                 <div class="detail-organizer-ic" id="detailOrganizerIcon" aria-hidden="true"><span>🤝</span></div>
@@ -2271,6 +2304,7 @@
     <div id="chat" class="content-section">
         <div class="chat" id="chatMessages"></div>
         <div class="chat-input">
+            <button type="button" class="chat-thanks-send" id="chatThanksSend" aria-label="ありがとうを送信">ありがとう</button>
             <input type="text" id="chatText" placeholder="メッセージを入力">
             <button type="button" class="chat-send" id="chatSend" aria-label="送信">→</button>
         </div>
@@ -2288,11 +2322,9 @@
     <div class="modal" id="thankOrganizerModal" role="dialog" aria-modal="true" aria-labelledby="thankOrganizerModalTitle">
         <div class="modal-sheet">
             <div class="modal-title" id="thankOrganizerModalTitle">募集者にお礼を送る</div>
-            <div class="modal-text">参加のお礼として、募集者宛のDMに送信されます。ありがとうはあなたの所持から募集者へ移ります。文章は編集できます。</div>
+            <div class="modal-text">参加のお礼として、募集者宛にありがとうを送ります。ありがとうはあなたの所持から募集者へ移ります。</div>
             <label class="profile-edit-label" for="thankOrganizerAmount">ありがとうの数（1以上・所持以内）</label>
             <input type="number" id="thankOrganizerAmount" class="profile-edit-input" min="1" value="1" inputmode="numeric" />
-            <label class="sr-only" for="thankOrganizerText">お礼メッセージ</label>
-            <textarea id="thankOrganizerText" class="modal-textarea" maxlength="500" placeholder="お礼のメッセージ" autocomplete="off"></textarea>
             <div class="modal-actions">
                 <button type="button" class="btn" id="thankOrganizerSkip">あとで</button>
                 <button type="button" class="btn btn-primary" id="thankOrganizerSend">送信する</button>
@@ -2369,7 +2401,6 @@
     <div id="accountProfileEdit" class="content-section">
         <div class="account-profile account-profile-edit-screen">
             <h2 class="account-block-title">プロフィールを編集</h2>
-            <p class="profile-edit-hint">表示名と自己紹介は、同期オン（<code style="font-size:0.85em;">?sync=auto</code>）のとき、サーバーにも保存され、他のユーザー側の表示名に反映されます。プロフィール画像はこのブラウザにだけ保存されます。</p>
             <label class="profile-edit-label" for="profileEditName">表示名</label>
             <input type="text" id="profileEditName" class="profile-edit-input" maxlength="80" autocomplete="nickname" />
             <label class="profile-edit-label" for="profileEditPhoto">プロフィール画像</label>
@@ -2439,6 +2470,7 @@
             pendingThankOrganizerUserId: '',
             pendingThankVolTitle: '',
             hostGrantThanksPendingUniq: 0,
+            thanksTipCooldownByUserId: {},
             auth: { userId: '', secret: '', displayName: '', phoneE164: '' },
             usersPublic: {},
             profile: { thanksCount: 10, name: '', avatar: '🙂', bio: '', photoDataUrl: '' },
@@ -2630,6 +2662,51 @@
                 .catch(function () { done(false); });
         }
 
+        function syncedPhotoForUserId(uid) {
+            if (!uid || !state.usersPublic || !state.usersPublic[uid]) return '';
+            var p = state.usersPublic[uid];
+            var src = p && typeof p.photoDataUrl === 'string' ? p.photoDataUrl : '';
+            return src.indexOf('data:image/') === 0 ? src : '';
+        }
+
+        function syncMyPhotoToServerIfNeeded() {
+            if (!liveSyncEnabled() || !getMyUserId()) return;
+            var localPhoto = String(state.profile.photoDataUrl || '');
+            var serverPhoto = syncedPhotoForUserId(getMyUserId());
+            if (localPhoto === serverPhoto) return;
+            var key = localPhoto || '__empty__';
+            if (state._lastPhotoSyncAttemptKey === key) return;
+            state._lastPhotoSyncAttemptKey = key;
+            liveSyncPatchProfile({ photoDataUrl: localPhoto }, function (ok) {
+                if (!ok) return;
+                if (!state.usersPublic) state.usersPublic = {};
+                if (!state.usersPublic[getMyUserId()]) state.usersPublic[getMyUserId()] = {};
+                state.usersPublic[getMyUserId()].photoDataUrl = localPhoto;
+            });
+        }
+
+        function userIdForDisplayName(displayName) {
+            var nm = normalizeDisplayName(displayName || '');
+            if (!nm || !state.usersPublic) return '';
+            var hit = '';
+            Object.keys(state.usersPublic).forEach(function (uid) {
+                if (hit) return;
+                var pub = state.usersPublic[uid];
+                if (!pub) return;
+                if (normalizeDisplayName(pub.displayName || '') === nm) {
+                    hit = uid;
+                }
+            });
+            return hit;
+        }
+
+        function publicProfileForUidOrName(uid, displayName) {
+            var byUid = uid && state.usersPublic ? state.usersPublic[uid] : null;
+            if (byUid) return byUid;
+            var guessedUid = userIdForDisplayName(displayName || '');
+            return guessedUid && state.usersPublic ? state.usersPublic[guessedUid] : null;
+        }
+
         function saveProfileFromForm() {
             var n = document.getElementById('profileEditName');
             var b = document.getElementById('profileEditBio');
@@ -2660,7 +2737,8 @@
                 liveSyncPatchProfile({
                     displayName: state.profile.name,
                     bio: state.profile.bio,
-                    thanksCount: state.profile.thanksCount
+                    thanksCount: state.profile.thanksCount,
+                    photoDataUrl: state.profile.photoDataUrl || ''
                 }, fin);
             } else {
                 fin(true);
@@ -2811,6 +2889,116 @@
                     && (n.joinStatus != null ? n.joinStatus : 'pending') === 'approved'
                     && notifIsOrganizer(n);
             });
+        }
+
+        function hasApprovedJoinWithOrganizer(organizerUserId, organizerName) {
+            var myUid = getMyUserId() || '';
+            var myName = normalizeDisplayName(syncAccountNameFromDom() || '');
+            var orgNameNorm = normalizeDisplayName(organizerName || '');
+            return (state.notifications || []).some(function (n) {
+                if (!n || n.type !== 'join_request') return false;
+                var st = n.joinStatus != null ? n.joinStatus : 'pending';
+                if (st !== 'approved') return false;
+                var mine = false;
+                if (myUid && n.applicantUserId) mine = n.applicantUserId === myUid;
+                else mine = myName && accountsMatch(n.applicantName, myName);
+                if (!mine) return false;
+                if (organizerUserId && n.organizerUserId) return n.organizerUserId === organizerUserId;
+                if (orgNameNorm) return accountsMatch(n.organizerName, orgNameNorm);
+                return false;
+            });
+        }
+
+        function canHostSendThanksToUser(targetUserId, targetName) {
+            var targetNameNorm = normalizeDisplayName(targetName || '');
+            return (state.notifications || []).some(function (n) {
+                if (!n || n.type !== 'join_request') return false;
+                var st = n.joinStatus != null ? n.joinStatus : 'pending';
+                if (st !== 'approved') return false;
+                if (!notifIsOrganizer(n)) return false;
+                if (targetUserId && n.applicantUserId) return n.applicantUserId === targetUserId;
+                if (targetNameNorm) return accountsMatch(n.applicantName, targetNameNorm);
+                return false;
+            });
+        }
+
+        function deriveChatPeerRole(targetUserId, targetName) {
+            var targetNameNorm = normalizeDisplayName(targetName || '');
+            var role = '';
+            (state.notifications || []).forEach(function (n) {
+                if (role || !n || n.type !== 'join_request') return;
+                var st = n.joinStatus != null ? n.joinStatus : 'pending';
+                if (st !== 'approved') return;
+
+                var targetIsApplicant = false;
+                if (targetUserId && n.applicantUserId) targetIsApplicant = n.applicantUserId === targetUserId;
+                else if (targetNameNorm) targetIsApplicant = accountsMatch(n.applicantName, targetNameNorm);
+                var targetIsOrganizer = false;
+                if (targetUserId && n.organizerUserId) targetIsOrganizer = n.organizerUserId === targetUserId;
+                else if (targetNameNorm) targetIsOrganizer = accountsMatch(n.organizerName, targetNameNorm);
+
+                if (notifIsOrganizer(n) && targetIsApplicant) role = 'applicant';
+                else if (notifIsApplicant(n) && targetIsOrganizer) role = 'organizer';
+            });
+            return role;
+        }
+
+        function updateChatThanksButtonUI() {
+            var btn = document.getElementById('chatThanksSend');
+            if (!btn) return;
+            var targetUid = state.currentChatPeerUserId || '';
+            var targetName = state.currentChatWith || '';
+            var th = findChatThread();
+            var knownRole = th && th.peerRole ? th.peerRole : '';
+            if (!knownRole) {
+                knownRole = deriveChatPeerRole(targetUid, targetName);
+                if (th && knownRole) th.peerRole = knownRole;
+            }
+            if (!knownRole && th && Array.isArray(th.messages)) {
+                var hasHostApprovalMsg = th.messages.some(function (m) {
+                    if (!m || !m.me) return false;
+                    var txt = String(m.text || '');
+                    return txt.indexOf('参加申請を承認しました') !== -1;
+                });
+                if (hasHostApprovalMsg) {
+                    knownRole = 'applicant';
+                    th.peerRole = knownRole;
+                }
+            }
+            if (knownRole === 'organizer') {
+                btn.hidden = true;
+                btn.disabled = true;
+                return;
+            }
+            var allowed = knownRole === 'applicant'
+                ? true
+                : canHostSendThanksToUser(targetUid, targetName);
+            btn.hidden = !allowed;
+            btn.disabled = !allowed;
+        }
+
+        function approvedJoinCountForVol(volId) {
+            var seen = {};
+            var cnt = 0;
+            (state.notifications || []).forEach(function (n) {
+                if (!n || n.type !== 'join_request') return;
+                if (n.volId !== volId) return;
+                if ((n.joinStatus != null ? n.joinStatus : 'pending') !== 'approved') return;
+                var key = n.applicantUserId
+                    ? ('uid:' + n.applicantUserId)
+                    : ('name:' + (normalizeDisplayName(n.applicantName || '') || '参加者'));
+                if (seen[key]) return;
+                seen[key] = true;
+                cnt += 1;
+            });
+            return cnt;
+        }
+
+        function isVolFilled(v) {
+            if (!v || !v.id) return false;
+            var cap = Number(v.capacity);
+            if (!isFinite(cap) || cap < 1) cap = 1;
+            return approvedJoinCountForVol(v.id) >= Math.floor(cap);
         }
 
         function updateDetailVolunteerDayUI() {
@@ -3224,12 +3412,14 @@
             });
             Object.keys(state.vols || {}).forEach(function (id) {
                 if (id.indexOf('vol-user-') !== 0) return;
-                if (!haveDom[id] && state.vols[id]) {
-                    homeCards.insertBefore(create(state.vols[id]), homeCards.firstChild);
+                var vol = state.vols[id];
+                if (!vol || isVolFilled(vol)) return;
+                if (!haveDom[id]) {
+                    homeCards.insertBefore(create(vol), homeCards.firstChild);
                 }
             });
             Object.keys(haveDom).forEach(function (id) {
-                if (!state.vols[id]) {
+                if (!state.vols[id] || isVolFilled(state.vols[id])) {
                     var el = haveDom[id];
                     if (el && el.parentNode) el.parentNode.removeChild(el);
                 }
@@ -3241,6 +3431,20 @@
             if (!data) return;
             if (data.usersPublic && typeof data.usersPublic === 'object') {
                 state.usersPublic = Object.assign({}, data.usersPublic);
+                var myUid = getMyUserId();
+                var syncedPhoto = syncedPhotoForUserId(myUid);
+                if (myUid && syncedPhoto && syncedPhoto !== state.profile.photoDataUrl) {
+                    state.profile.photoDataUrl = syncedPhoto;
+                    savePersistedProfile();
+                    applyProfileToAccountDom();
+                    renderProfilePhotoPreview();
+                    if (typeof refreshOwnHomeCardIcons === 'function') refreshOwnHomeCardIcons();
+                }
+                if (typeof refreshAllHomeCardIcons === 'function') refreshAllHomeCardIcons();
+                if (document.getElementById('appShell') && document.getElementById('appShell').dataset.tab === 'organizer') {
+                    renderOrganizerProfile();
+                }
+                syncMyPhotoToServerIfNeeded();
             }
             var sv = data.vols || {};
             Object.keys(sv).forEach(function (k) {
@@ -3270,6 +3474,7 @@
                 if (chatEl && chatEl.classList.contains('active')) renderChat();
                 setUnreadFlag();
             }
+            updateChatThanksButtonUI();
         }
 
         function liveSyncPostVol(v) {
@@ -3571,6 +3776,9 @@
                     if (titleInput) titleInput.focus({ preventScroll: true });
                 }, 50);
             }
+            if (id === 'chat') {
+                updateChatThanksButtonUI();
+            }
             if (id === 'dm' || id === 'chat') {
                 if (markAllDmAsRead()) {
                     renderDmThreads();
@@ -3634,12 +3842,22 @@
             document.getElementById('appShell').classList.toggle('has-unread', has);
         }
 
-        function hasPendingJoinNotifications() {
+        function hasVisibleNotificationsForMe() {
+            var me = syncAccountNameFromDom();
             return (state.notifications || []).some(function (n) {
-                if (!n || n.type !== 'join_request') return false;
-                var st = n.joinStatus != null ? n.joinStatus : 'pending';
-                if (st !== 'pending') return false;
-                return notifIsOrganizer(n);
+                if (!n) return false;
+                if (isNotificationDismissedFromList(n.id)) return false;
+                if (n.type === 'thanks_granted') {
+                    if (n.applicantUserId && getMyUserId()) return n.applicantUserId === getMyUserId();
+                    return accountsMatch(n.applicantName, me);
+                }
+                if (n.type === 'thanks_tip') {
+                    return !!(getMyUserId() && n.organizerUserId === getMyUserId());
+                }
+                if (n.type === 'join_request') {
+                    return notifIsOrganizer(n) || notifIsApplicant(n);
+                }
+                return true;
             });
         }
 
@@ -3648,13 +3866,13 @@
             var home = document.querySelector('.bottom-nav .nav-item[data-section="home"]');
             if (!acc || !home) return;
             var onHome = home.classList.contains('active');
-            acc.classList.toggle('nav-item--pending-notif', onHome && hasPendingJoinNotifications());
+            acc.classList.toggle('nav-item--pending-notif', onHome && hasVisibleNotificationsForMe());
         }
 
         function updateNotifBadge() {
             var shell = document.getElementById('appShell');
             if (!shell) return;
-            shell.classList.toggle('has-notif-unread', hasPendingJoinNotifications());
+            shell.classList.toggle('has-notif-unread', hasVisibleNotificationsForMe());
             syncAccountTabNotifDot();
         }
 
@@ -3758,15 +3976,6 @@
             var notifTools = document.getElementById('notifListTools');
             if (notifTools) notifTools.hidden = list.length === 0;
             if (!list.length) {
-                var empty = document.createElement('div');
-                empty.className = 'card';
-                empty.style.textAlign = 'center';
-                empty.style.color = 'var(--text-sub)';
-                empty.style.fontSize = '0.92rem';
-                empty.style.padding = '18px 14px';
-                empty.style.lineHeight = '1.55';
-                empty.textContent = '通知はまだありません。参加申請が届くと募集者に表示され、承認すると参加者へ承認として届きます。当日のあと、募集者からありがとうが届くと参加者のありがとうが増えます。';
-                wrap.appendChild(empty);
                 updateNotifBadge();
                 return;
             }
@@ -3936,6 +4145,11 @@
                                 updateNotifBadge();
                                 renderNotifications();
                                 syncDetailActionBars();
+                                liveSyncReconcileHomeCards();
+                                renderAccount();
+                                if (document.getElementById('appShell') && document.getElementById('appShell').dataset.tab === 'organizer') {
+                                    renderOrganizerProfile();
+                                }
                                 showToast('承認しました。参加者に承認通知が届きます。');
                             });
                             var btnView = document.createElement('button');
@@ -3971,6 +4185,7 @@
                             appendOutgoingDm(dmTarget, isHost
                                 ? '参加申請を承認しました。詳細はこちらからご連絡します。'
                                 : '承認ありがとうございます。当日までに確認したいことがあればお送りします。', dmPeer);
+                            ensureThread(dmTarget, dmPeer, isHost ? 'applicant' : 'organizer');
                             setUnreadFlag();
                             renderDmThreads();
                             openChat(dmTarget, dmPeer);
@@ -3983,9 +4198,10 @@
                 wrap.appendChild(row);
             });
             updateNotifBadge();
+            updateChatThanksButtonUI();
         }
 
-        function ensureThread(withName, peerUserId) {
+        function ensureThread(withName, peerUserId, peerRole) {
             peerUserId = peerUserId || '';
             var t = null;
             if (peerUserId) {
@@ -3996,6 +4212,7 @@
             }
             if (t) {
                 if (peerUserId) t.peerUserId = peerUserId;
+                if (peerRole) t.peerRole = peerRole;
                 if (withName) {
                     t.with = withName;
                     t.avatar = (withName || '？').trim().slice(0, 1) || '？';
@@ -4006,6 +4223,7 @@
             var avatar = (dis || '？').trim().slice(0, 1) || '？';
             t = { with: dis, avatar: avatar, unread: true, lastAt: '今', messages: [] };
             if (peerUserId) t.peerUserId = peerUserId;
+            if (peerRole) t.peerRole = peerRole;
             state.threads.unshift(t);
             return t;
         }
@@ -4026,10 +4244,12 @@
             if (cover) {
                 var img = d.image ? String(d.image) : '';
                 if (img) {
+                    cover.hidden = false;
                     cover.className = 'detail-cover detail-cover--photo';
                     cover.style.backgroundImage = 'url(\'' + img.replace(/'/g, '%27') + '\')';
                 } else {
-                    cover.className = 'detail-cover detail-cover--empty';
+                    cover.hidden = true;
+                    cover.className = 'detail-cover';
                     cover.style.backgroundImage = '';
                 }
             }
@@ -4043,8 +4263,17 @@
 
             var orgIcon = document.getElementById('detailOrganizerIcon');
             if (orgIcon) {
-                var sp = orgIcon.querySelector('span');
-                if (sp) sp.textContent = d.thumb || '🤝';
+                var pub = publicProfileForUidOrName(d.hostedByUserId || '', d.chatWith || '');
+                var syncedPhoto = pub && typeof pub.photoDataUrl === 'string' ? pub.photoDataUrl : '';
+                if (syncedPhoto && syncedPhoto.indexOf('data:image/') === 0) {
+                    orgIcon.classList.add('detail-organizer-ic--photo');
+                    orgIcon.style.backgroundImage = 'url(' + JSON.stringify(syncedPhoto) + ')';
+                    orgIcon.innerHTML = '';
+                } else {
+                    orgIcon.classList.remove('detail-organizer-ic--photo');
+                    orgIcon.style.backgroundImage = '';
+                    orgIcon.innerHTML = '<span>' + escapeHtml(d.thumb || '🤝') + '</span>';
+                }
             }
             var orgName = document.getElementById('detailOrganizerName');
             if (orgName) orgName.textContent = d.chatWith || '主催者';
@@ -4078,6 +4307,7 @@
             state.currentChatPeerUserId = peerUserId || '';
             navigateTo('chat');
             renderChat();
+            updateChatThanksButtonUI();
         }
 
         function openOrganizerProfile(withName, peerUserId) {
@@ -4161,6 +4391,14 @@
         function renderDmThreads() {
             var wrap = document.getElementById('dmThreads');
             if (!wrap) return;
+            function dmEsc(s) {
+                return String(s == null ? '' : s)
+                    .replace(/&/g, '&amp;')
+                    .replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;')
+                    .replace(/"/g, '&quot;')
+                    .replace(/'/g, '&#39;');
+            }
             var tools = document.getElementById('dmListTools');
             if (tools) tools.hidden = state.threads.length === 0;
             wrap.innerHTML = '';
@@ -4169,15 +4407,20 @@
                 card.className = 'card dm-thread-card';
                 var last = t.messages[t.messages.length - 1];
                 var preview = last ? last.text : '…';
+                var peerPub = publicProfileForUidOrName(t.peerUserId || '', t.with || '');
+                var peerPhoto = peerPub && typeof peerPub.photoDataUrl === 'string' ? peerPub.photoDataUrl : '';
+                var avatarInner = (peerPhoto && peerPhoto.indexOf('data:image/') === 0)
+                    ? ('<img class="dm-avatar-img" src="' + dmEsc(peerPhoto) + '" alt="">')
+                    : dmEsc(t.avatar);
                 card.innerHTML =
                     '<div class="dm-thread-card-inner" role="button" tabindex="0">' +
                         '<div class="dm-thread">' +
-                            '<div class="dm-avatar">' + t.avatar + '</div>' +
+                            '<div class="dm-avatar" role="button" tabindex="0" aria-label="' + dmEsc((t.with || '相手') + 'のプロフィール') + '">' + avatarInner + '</div>' +
                             '<div class="dm-meta">' +
-                                '<div class="dm-name">' + t.with + (t.unread ? ' <span style="color:var(--accent);font-size:0.75rem;font-weight:900;">●</span>' : '') + '</div>' +
-                                '<div class="dm-preview">' + preview + '</div>' +
+                                '<div class="dm-name">' + dmEsc(t.with) + (t.unread ? ' <span style="color:var(--accent);font-size:0.75rem;font-weight:900;">●</span>' : '') + '</div>' +
+                                '<div class="dm-preview">' + dmEsc(preview) + '</div>' +
                             '</div>' +
-                            '<div style="color:#6a6a6a;font-size:0.75rem;flex-shrink:0;">' + (t.lastAt || '') + '</div>' +
+                            '<div style="color:#6a6a6a;font-size:0.75rem;flex-shrink:0;">' + dmEsc(t.lastAt || '') + '</div>' +
                         '</div>' +
                     '</div>' +
                     '<button type="button" class="dm-thread-delete" aria-label="このスレッドを削除">×</button>';
@@ -4194,6 +4437,20 @@
                         if (e.key === 'Enter' || e.key === ' ') {
                             e.preventDefault();
                             openThread();
+                        }
+                    });
+                }
+                var avatarEl = card.querySelector('.dm-avatar');
+                if (avatarEl) {
+                    var openProfile = function (e) {
+                        e.stopPropagation();
+                        openOrganizerProfile(t.with || '主催者', t.peerUserId || '');
+                    };
+                    avatarEl.addEventListener('click', openProfile);
+                    avatarEl.addEventListener('keydown', function (e) {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            openProfile(e);
                         }
                     });
                 }
@@ -4242,7 +4499,7 @@
             var listEl = document.getElementById('accountMyOpenList');
             if (!block || !listEl) return;
             var vols = Object.keys(state.vols || {}).map(function (k) { return state.vols[k]; }).filter(function (v) {
-                return v && isOwnVol(v);
+                return v && isOwnVol(v) && !isVolFilled(v);
             });
             if (!vols.length) {
                 block.hidden = true;
@@ -4408,15 +4665,24 @@
             var nameEl = document.getElementById('organizerName');
             if (nameEl) nameEl.textContent = name;
 
+            var uid = state.currentOrganizerUserId || '';
+            var pub = publicProfileForUidOrName(uid, name);
             var avatarEl = document.getElementById('organizerAvatar');
             if (avatarEl) {
-                var sampleVol = Object.keys(state.vols || {}).map(function (k) { return state.vols[k]; }).find(function (v) { return v && v.chatWith === name; });
-                avatarEl.textContent = (sampleVol && sampleVol.thumb) ? sampleVol.thumb : ((name || '？').trim().slice(0, 1) || '？');
+                var syncedPhoto = pub && typeof pub.photoDataUrl === 'string' ? pub.photoDataUrl : '';
+                if (syncedPhoto && syncedPhoto.indexOf('data:image/') === 0) {
+                    avatarEl.textContent = '';
+                    avatarEl.style.backgroundImage = 'url(' + JSON.stringify(syncedPhoto) + ')';
+                    avatarEl.classList.add('account-avatar--photo');
+                } else {
+                    avatarEl.classList.remove('account-avatar--photo');
+                    avatarEl.style.backgroundImage = '';
+                    var sampleVol = Object.keys(state.vols || {}).map(function (k) { return state.vols[k]; }).find(function (v) { return v && v.chatWith === name; });
+                    avatarEl.textContent = (sampleVol && sampleVol.thumb) ? sampleVol.thumb : ((name || '？').trim().slice(0, 1) || '？');
+                }
             }
 
             var organizerBioEl = document.getElementById('organizerBio');
-            var uid = state.currentOrganizerUserId || '';
-            var pub = uid && state.usersPublic ? state.usersPublic[uid] : null;
             var bioText = pub && String(pub.bio || '').trim() ? String(pub.bio).trim() : '自己紹介はまだありません。';
             var thanksCountEl = document.getElementById('organizerThanksCount');
             if (thanksCountEl) {
@@ -4430,7 +4696,9 @@
             var openWrap = document.getElementById('organizerOpenCards');
             if (openWrap) {
                 openWrap.innerHTML = '';
-                var openVols = Object.keys(state.vols).map(function (k) { return state.vols[k]; }).filter(function (v) { return v.chatWith === name; });
+                var openVols = Object.keys(state.vols).map(function (k) { return state.vols[k]; }).filter(function (v) {
+                    return v.chatWith === name && !isVolFilled(v);
+                });
                 if (!openVols.length) {
                     var emptyOpen = document.createElement('div');
                     emptyOpen.className = 'account-history-item';
@@ -4455,7 +4723,13 @@
 
             var orgAct = document.querySelector('#organizer .organizer-actions');
             if (orgAct) {
-                orgAct.hidden = accountsMatch(name, syncAccountNameFromDom());
+                var me = syncAccountNameFromDom();
+                var hasThread = (state.threads || []).some(function (t) {
+                    if (!t) return false;
+                    if (uid && t.peerUserId) return t.peerUserId === uid;
+                    return accountsMatch(t.with, name);
+                });
+                orgAct.hidden = accountsMatch(name, me) || hasThread;
             }
         }
 
@@ -4492,15 +4766,11 @@
                 amtEl.max = String(Math.max(1, bal));
                 amtEl.value = String(Math.min(1, Math.max(1, bal)));
             }
-            var ta = document.getElementById('thankOrganizerText');
-            if (ta) {
-                ta.value = '「' + title + '」のご案内ありがとうございます。参加を楽しみにしています！';
-            }
             var m = document.getElementById('thankOrganizerModal');
             if (m) {
                 m.classList.add('open');
                 window.setTimeout(function () {
-                    if (ta) ta.focus({ preventScroll: true });
+                    if (amtEl) amtEl.focus({ preventScroll: true });
                 }, 80);
             }
         }
@@ -4513,6 +4783,28 @@
             var orgUid = String(state.pendingThankOrganizerUserId || '').trim();
             if (!orgUid || orgUid.indexOf('usr-') !== 0) {
                 showToast('募集者の同期アカウント情報がないため、ありがとうを送れません（同期ログインと募集のホスト情報が必要です）');
+                return;
+            }
+            var th = findChatThread();
+            var peerRole = th && th.peerRole ? th.peerRole : deriveChatPeerRole(orgUid, org);
+            if (th && peerRole && !th.peerRole) {
+                th.peerRole = peerRole;
+            }
+            if (peerRole === 'organizer' || hasApprovedJoinWithOrganizer(orgUid, org)) {
+                showToast('参加者側からはありがとうを送れません（主催者→参加者のみ）');
+                return;
+            }
+            if (peerRole !== 'applicant' && !canHostSendThanksToUser(orgUid, org)) {
+                showToast('参加者側からはありがとうを送れません（主催者のみ送信できます）');
+                return;
+            }
+            var cooldownMs = 60 * 1000;
+            if (!state.thanksTipCooldownByUserId) state.thanksTipCooldownByUserId = {};
+            var now = Date.now();
+            var lastAt = Number(state.thanksTipCooldownByUserId[orgUid] || 0);
+            if (isFinite(lastAt) && lastAt > 0 && now - lastAt < cooldownMs) {
+                var remain = Math.ceil((cooldownMs - (now - lastAt)) / 1000);
+                showToast('連続送信はできません。' + remain + '秒後にもう一度お試しください');
                 return;
             }
             var amtEl = document.getElementById('thankOrganizerAmount');
@@ -4528,9 +4820,7 @@
             }
             state.profile.thanksCount = bal - per;
             persistProfileThanksCount();
-            var ta = document.getElementById('thankOrganizerText');
-            var raw = ta ? String(ta.value || '').trim() : '';
-            var text = raw || 'ありがとうございます。参加を楽しみにしています！';
+            var text = 'ありがとうを送りました。';
             appendOutgoingDm(org, text, orgUid);
             var tipN = {
                 id: 'notif-tip-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8),
@@ -4544,6 +4834,7 @@
                 thanksAmount: per
             };
             liveSyncPostNotification(tipN);
+            state.thanksTipCooldownByUserId[orgUid] = now;
             setUnreadFlag();
             renderDmThreads();
             closeThankOrganizerModal();
@@ -4689,6 +4980,47 @@
                 }
                 return { ok: false, imageDropped: false };
             }
+            function makeHomeCardIconInnerHtml(v) {
+                var own = isOwnVol(v);
+                var photo = '';
+                if (own) photo = String(state.profile.photoDataUrl || '');
+                if (!photo && v && v.hostedByUserId) photo = syncedPhotoForUserId(v.hostedByUserId);
+                if (!photo && v && v.chatWith) {
+                    var uidByName = userIdForDisplayName(v.chatWith);
+                    if (uidByName) photo = syncedPhotoForUserId(uidByName);
+                }
+                if (photo && photo.indexOf('data:image/') === 0) {
+                    return '<img class="req-icon-photo" src="' + escapeHtml(photo) + '" alt="">';
+                }
+                return '<span aria-hidden="true">' + escapeHtml(v.thumb || '🤝') + '</span>';
+            }
+
+            function refreshOwnHomeCardIcons() {
+                var homeCards = document.getElementById('homeCards');
+                if (!homeCards) return;
+                homeCards.querySelectorAll('[data-open-detail]').forEach(function (cardEl) {
+                    var vid = cardEl.getAttribute('data-open-detail');
+                    var vol = vid && state.vols ? state.vols[vid] : null;
+                    if (!vol || !isOwnVol(vol)) return;
+                    var iconEl = cardEl.querySelector('.req-icon');
+                    if (!iconEl) return;
+                    iconEl.innerHTML = makeHomeCardIconInnerHtml(vol);
+                });
+            }
+
+            function refreshAllHomeCardIcons() {
+                var homeCards = document.getElementById('homeCards');
+                if (!homeCards) return;
+                homeCards.querySelectorAll('[data-open-detail]').forEach(function (cardEl) {
+                    var vid = cardEl.getAttribute('data-open-detail');
+                    var vol = vid && state.vols ? state.vols[vid] : null;
+                    if (!vol) return;
+                    var iconEl = cardEl.querySelector('.req-icon');
+                    if (!iconEl) return;
+                    iconEl.innerHTML = makeHomeCardIconInnerHtml(vol);
+                });
+            }
+
             function createHomeCardElement(v) {
                 var card = document.createElement('div');
                 card.className = 'card card-clickable';
@@ -4699,9 +5031,11 @@
                 if (v.image) {
                     mediaHtml = '<div class="home-card-media" aria-hidden="true" style="background-image:url(\'' + escapeHtml(v.image) + '\');background-size:cover;background-position:center;"></div>';
                 }
-                var iconHtml = isOwnVol(v)
-                    ? '<div class="req-icon" role="button" tabindex="0" data-open-account="1" aria-label="アカウント"><span aria-hidden="true">' + escapeHtml(v.thumb || '🤝') + '</span></div>'
-                    : '<div class="req-icon" role="button" tabindex="0" data-open-organizer="' + escapeHtml(v.chatWith || '主催者') + '"' +(v.hostedByUserId ? (' data-organizer-user-id="' + escapeHtml(v.hostedByUserId) + '"') : '') + ' aria-label="' + escapeHtml((v.chatWith || '主催者') + 'のプロフィール') + '"><span aria-hidden="true">' + escapeHtml(v.thumb || '🤝') + '</span></div>';
+                var own = isOwnVol(v);
+                var iconInner = makeHomeCardIconInnerHtml(v);
+                var iconHtml = own
+                    ? '<div class="req-icon" role="button" tabindex="0" data-open-account="1" aria-label="アカウント">' + iconInner + '</div>'
+                    : '<div class="req-icon" role="button" tabindex="0" data-open-organizer="' + escapeHtml(v.chatWith || '主催者') + '"' +(v.hostedByUserId ? (' data-organizer-user-id="' + escapeHtml(v.hostedByUserId) + '"') : '') + ' aria-label="' + escapeHtml((v.chatWith || '主催者') + 'のプロフィール') + '">' + iconInner + '</div>';
                 card.innerHTML = '' +
                     '<div class="home-card-body">' +
                         '<div class="req-card">' +
@@ -5072,7 +5406,8 @@
                     renderAccount();
                     updateNotifBadge();
                     renderNotifications();
-                    goBack();
+                    var homeNav = document.querySelector('.bottom-nav .nav-item[data-section="home"]');
+                    showSection('home', homeNav);
                     showToast('募集を削除しました');
                 });
             }
@@ -5082,7 +5417,7 @@
             if (detailDmBtn) detailDmBtn.addEventListener('click', function () {
                 var who = detailDmBtn.dataset.chatWith || '主催者';
                 var peer = detailDmBtn.dataset.organizerUserId || '';
-                ensureThread(who, peer);
+                ensureThread(who, peer, 'organizer');
                 openChat(who, peer);
                 setUnreadFlag();
             });
@@ -5092,7 +5427,7 @@
             if (organizerDmBtn) organizerDmBtn.addEventListener('click', function () {
                 var who = organizerDmBtn.dataset.chatWith || '主催者';
                 var peer = state.currentOrganizerUserId || '';
-                ensureThread(who, peer);
+                ensureThread(who, peer, 'organizer');
                 openChat(who, peer);
                 setUnreadFlag();
             });
@@ -5126,6 +5461,7 @@
             var chatSend = document.getElementById('chatSend');
             var chatText = document.getElementById('chatText');
             var chatMessages = document.getElementById('chatMessages');
+            var chatThanksSend = document.getElementById('chatThanksSend');
             function sendChat() {
                 if (!chatText || !chatMessages) return;
                 var v = (chatText.value || '').trim();
@@ -5146,6 +5482,17 @@
                 e.preventDefault();
                 sendChat();
             });
+            if (chatThanksSend) {
+                chatThanksSend.addEventListener('click', function () {
+                    var toName = state.currentChatWith || '相手';
+                    var toUid = state.currentChatPeerUserId || '';
+                    if (!canHostSendThanksToUser(toUid, toName)) {
+                        showToast('参加者側からはありがとうを送れません（主催者のみ送信できます）');
+                        return;
+                    }
+                    openThankOrganizerModal(toName, 'DM', toUid);
+                });
+            }
 
             window.__tfCreateHomeCard = createHomeCardElement;
             window.__tfSyncSaveUserVolsFromState = function () {
@@ -5181,7 +5528,11 @@
                         state.profile.photoDataUrl = url;
                         applyProfileToAccountDom();
                         renderProfilePhotoPreview();
+                        refreshOwnHomeCardIcons();
                         savePersistedProfile();
+                        if (liveSyncEnabled() && getMyUserId()) {
+                            liveSyncPatchProfile({ photoDataUrl: state.profile.photoDataUrl || '' }, function () {});
+                        }
                         showToast('プロフィール画像を更新しました');
                     });
                 });
@@ -5191,7 +5542,11 @@
                 state.profile.photoDataUrl = '';
                 applyProfileToAccountDom();
                 renderProfilePhotoPreview();
+                refreshOwnHomeCardIcons();
                 savePersistedProfile();
+                if (liveSyncEnabled() && getMyUserId()) {
+                    liveSyncPatchProfile({ photoDataUrl: '' }, function () {});
+                }
                 showToast('プロフィール画像を削除しました');
             });
 

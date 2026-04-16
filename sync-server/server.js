@@ -41,6 +41,7 @@ function loadBundle() {
             if (u && (u.thanksCount == null || !isFinite(Number(u.thanksCount)))) {
                 u.thanksCount = 10;
             }
+            if (u && u.photoDataUrl == null) u.photoDataUrl = '';
         });
         return d;
     } catch (_) {
@@ -70,7 +71,10 @@ function usersPublicMap() {
             o[id] = {
                 displayName: u.displayName,
                 bio: u.bio || '',
-                thanksCount: isFinite(tc) && tc >= 0 ? Math.floor(tc) : 10
+                thanksCount: isFinite(tc) && tc >= 0 ? Math.floor(tc) : 10,
+                photoDataUrl: (typeof u.photoDataUrl === 'string' && u.photoDataUrl.indexOf('data:image/') === 0)
+                    ? u.photoDataUrl
+                    : ''
             };
         }
     });
@@ -191,7 +195,8 @@ app.post('/api/auth/register', function (req, res) {
         displayName: displayName.slice(0, 80),
         secret: secret,
         bio: '',
-        thanksCount: 10
+        thanksCount: 10,
+        photoDataUrl: ''
     };
     saveBundle(bundle);
     res.json({ ok: true, userId: userId, secret: secret, displayName: displayName.slice(0, 80) });
@@ -224,12 +229,26 @@ app.patch('/api/auth/me', function (req, res) {
         }
         u.thanksCount = Math.floor(tc);
     }
+    if (body.photoDataUrl != null) {
+        const photo = String(body.photoDataUrl || '');
+        if (photo) {
+            if (photo.indexOf('data:image/') !== 0 || photo.length > 2000000) {
+                return res.status(400).json({ error: 'photoDataUrl' });
+            }
+            u.photoDataUrl = photo;
+        } else {
+            u.photoDataUrl = '';
+        }
+    }
     saveBundle(bundle);
     res.json({
         ok: true,
         displayName: u.displayName,
         bio: u.bio || '',
-        thanksCount: typeof u.thanksCount === 'number' && isFinite(u.thanksCount) ? u.thanksCount : 10
+        thanksCount: typeof u.thanksCount === 'number' && isFinite(u.thanksCount) ? u.thanksCount : 10,
+        photoDataUrl: (typeof u.photoDataUrl === 'string' && u.photoDataUrl.indexOf('data:image/') === 0)
+            ? u.photoDataUrl
+            : ''
     });
 });
 
@@ -317,7 +336,9 @@ app.post('/api/auth/phone/verify', function (req, res) {
         displayName: dn.slice(0, 80),
         secret: secret,
         bio: '',
-        phoneE164: norm
+        phoneE164: norm,
+        thanksCount: 10,
+        photoDataUrl: ''
     };
     saveBundle(bundle);
     res.json({
