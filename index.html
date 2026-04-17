@@ -2521,8 +2521,10 @@
         var teertabFirebaseListenerAttached = false;
         var teertabUserDefaultListenerAttached = false;
         var teertabUserDocUnsub = null;
+        var teertabUserCardsUnsub = null;
         var userDefaultSaveTimer = null;
         var currentUserDocRef = null;
+        var currentUserCardsColRef = null;
         var teertabMainBooted = false;
         var firebaseAuthUnsub = null;
 
@@ -2570,6 +2572,17 @@
                 currentUserDocRef = TF.userDocRef(uid);
             }
             return currentUserDocRef;
+        }
+
+        function getCurrentUserCardsColRef() {
+            var TF = tf();
+            if (!TF || !TF.userCardsColRef) return null;
+            var uid = getMyUserId();
+            if (!uid) return null;
+            if (!currentUserCardsColRef || currentUserCardsColRef.id !== 'cards' || currentUserCardsColRef.parent.id !== uid) {
+                currentUserCardsColRef = TF.userCardsColRef(uid);
+            }
+            return currentUserCardsColRef;
         }
 
         function setAuthGateVisible(visible, statusText) {
@@ -2719,6 +2732,7 @@
                 var migratedKey = 'teertab.firestoreMigrated.' + uid + '.v1';
                 if (localStorage.getItem(migratedKey)) return Promise.resolve();
                 var patch = {};
+                var legacyCards = [];
                 var prof = localStorage.getItem('tealfolder.profile.v1');
                 if (prof) {
                     try {
@@ -2740,7 +2754,7 @@
                 if (vols) {
                     try {
                         var arr = JSON.parse(vols);
-                        if (Array.isArray(arr)) patch.hostedVols = arr;
+                        if (Array.isArray(arr)) legacyCards = arr;
                     } catch (_) {}
                 }
                 var dis = localStorage.getItem('tealfolder.dismissedNotifs.v1');
@@ -2763,6 +2777,12 @@
                 }
                 if (Object.keys(patch).length) {
                     return TFm.setDoc(userDocRef, Object.assign({}, patch, { updatedAt: TFm.serverTimestamp() }), { merge: true })
+                        .then(function () { return syncUserCardsReplace(legacyCards); })
+                        .then(done)
+                        .catch(done);
+                }
+                if (legacyCards.length) {
+                    return syncUserCardsReplace(legacyCards)
                         .then(done)
                         .catch(done);
                 }
@@ -2788,11 +2808,6 @@
             if (data.dismissedNotifs && typeof data.dismissedNotifs === 'object') {
                 state.dismissedNotifsRemote = Object.assign({}, data.dismissedNotifs);
             }
-            if (Array.isArray(data.hostedVols)) {
-                state.userDefaultHostedVols = data.hostedVols.filter(function (v) {
-                    return v && typeof v.id === 'string' && v.id.indexOf('vol-user-') === 0;
-                });
-            }
             state.userDefaultHydrated = true;
             applyProfileToAccountDom();
             if (typeof liveSyncReconcileHomeCards === 'function') liveSyncReconcileHomeCards();
@@ -2815,6 +2830,91 @@
             });
         }
 
+        function applyUserCardsToState(cards) {
+            var nextList = Array.isArray(cards) ? cards.filter(function (v) {
+                return v && typeof v.id === 'string' && v.id.indexOf('vol-user-') === 0;
+            }) : [];
+            var nextIds = {};
+            var uid = getMyUserId();
+            nextList.forEach(function (v) {
+                var synced = Object.assign({}, v);
+                if (uid) synced.hostedByUserId = uid;
+                state.vols[synced.id] = synced;
+                state.myHostedVolIds[synced.id] = true;
+                nextIds[synced.id] = true;
+            });
+            Object.keys(state.myHostedVolIds || {}).forEach(function (id) {
+                if (!nextIds[id]) {
+                    delete state.myHostedVolIds[id];
+                    if (state.vols[id]) delete state.vols[id];
+                }
+            });
+            state.userDefaultHostedVols = nextList;
+            renderSearchResults();
+            renderAccount();
+            liveSyncReconcileHomeCards();
+            updateHomeEmptyState();
+        }
+
+        function fetchUserCardsOnce() {
+            var TF = tf();
+            var cardsCol = getCurrentUserCardsColRef();
+            if (!TF || !cardsCol) return Promise.resolve();
+            return TF.getDocs(cardsCol)
+                .then(function (snap) {
+                    var cards = [];
+                    snap.forEach(function (d) {
+                        var card = d.data() || {};
+                        card.id = card.id || d.id;
+                        cards.push(card);
+                    });
+                    applyUserCardsToState(cards);
+                })
+                .catch(function () {});
+        }
+
+        function attachUserCardsFirestoreListener() {
+            var TF = tf();
+            var cardsCol = getCurrentUserCardsColRef();
+            if (!TF || !cardsCol) return;
+            if (typeof teertabUserCardsUnsub === 'function') teertabUserCardsUnsub();
+            teertabUserCardsUnsub = TF.onSnapshot(cardsCol, function (snap) {
+                var cards = [];
+                snap.forEach(function (d) {
+                    var card = d.data() || {};
+                    card.id = card.id || d.id;
+                    cards.push(card);
+                });
+                applyUserCardsToState(cards);
+            });
+        }
+
+        function syncUserCardsReplace(list) {
+            var TF = tf();
+            var cardsCol = getCurrentUserCardsColRef();
+            var uid = getMyUserId();
+            if (!TF || !cardsCol || !uid) return Promise.resolve(false);
+            var safeList = (Array.isArray(list) ? list : []).filter(function (v) {
+                return v && typeof v.id === 'string' && v.id.indexOf('vol-user-') === 0;
+            }).map(function (v) {
+                var out = Object.assign({}, v);
+                out.hostedByUserId = uid;
+                return out;
+            });
+            var nextById = {};
+            safeList.forEach(function (v) { nextById[v.id] = v; });
+            return TF.getDocs(cardsCol).then(function (snap) {
+                var jobs = [];
+                snap.forEach(function (d) {
+                    if (!nextById[d.id]) jobs.push(TF.deleteDoc(TF.userCardDocRef(uid, d.id)));
+                });
+                Object.keys(nextById).forEach(function (id) {
+                    jobs.push(TF.setDoc(TF.userCardDocRef(uid, id), nextById[id], { merge: true }));
+                });
+                return Promise.all(jobs).then(function () { return true; });
+            }).catch(function () { return false; });
+        }
+
         function flushUserDefaultDoc() {
             var TF = tf();
             if (!TF) return;
@@ -2833,9 +2933,6 @@
                 photoStorageUrl: photoStorageUrl,
                 updatedAt: TF.serverTimestamp()
             };
-            if (state.userDefaultHydrated && Array.isArray(state.userDefaultHostedVols)) {
-                payload.hostedVols = state.userDefaultHostedVols;
-            }
             if (state.dismissedNotifsRemote && typeof state.dismissedNotifsRemote === 'object') {
                 payload.dismissedNotifs = state.dismissedNotifsRemote;
             }
@@ -3921,10 +4018,6 @@
             var sv = data.vols || {};
             Object.keys(sv).forEach(function (k) {
                 if (k.indexOf('vol-user-') === 0 && sv[k]) state.vols[k] = sv[k];
-            });
-            Object.keys(state.vols).forEach(function (k) {
-                if (k.indexOf('vol-user-') !== 0) return;
-                if (!sv[k]) delete state.vols[k];
             });
             state.notifications = (data.notifications || []).map(function (x) {
                 return Object.assign({}, x);
@@ -5544,7 +5637,11 @@
                         state.userDefaultHydrated = true;
                         state.userDefaultHostedVols = [];
                     }
+                    return fetchUserCardsOnce();
+                })
+                .then(function () {
                     attachUserDefaultFirestoreListener();
+                    attachUserCardsFirestoreListener();
                     if (!teertabMainBooted) {
                         teertabMainBooted = true;
                         teertabRunMainAfterUserDefaultHydrate();
@@ -5552,6 +5649,7 @@
                 })
                 .catch(function () {
                     attachUserDefaultFirestoreListener();
+                    attachUserCardsFirestoreListener();
                     if (!teertabMainBooted) {
                         teertabMainBooted = true;
                         teertabRunMainAfterUserDefaultHydrate();
@@ -5581,11 +5679,14 @@
                     state.auth.displayName = '';
                     state.auth.phoneE164 = '';
                     currentUserDocRef = null;
+                    currentUserCardsColRef = null;
                     state.userDefaultHydrated = false;
                     state.userDefaultHostedVols = [];
                     state.dismissedNotifsRemote = {};
                     if (typeof teertabUserDocUnsub === 'function') teertabUserDocUnsub();
                     teertabUserDocUnsub = null;
+                    if (typeof teertabUserCardsUnsub === 'function') teertabUserCardsUnsub();
+                    teertabUserCardsUnsub = null;
                     teertabUserDefaultListenerAttached = false;
                     setAuthGateVisible(true, '');
                     return;
@@ -5652,7 +5753,7 @@
                 });
                 state.userDefaultHostedVols = clean;
                 if (tf()) {
-                    flushUserDefaultDoc();
+                    syncUserCardsReplace(clean);
                     return true;
                 }
                 return false;
