@@ -336,6 +336,33 @@
         #account .account-profile {
             padding: 8px 0 28px;
             text-align: center;
+            position: relative;
+        }
+        .account-settings-btn {
+            position: absolute;
+            top: 2px;
+            left: 0;
+            width: 40px;
+            height: 40px;
+            border: 1px solid #3a3a3a;
+            border-radius: 12px;
+            background: rgba(30, 30, 30, 0.96);
+            color: #b8b8b8;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            touch-action: manipulation;
+            -webkit-appearance: none;
+            appearance: none;
+            padding: 0;
+        }
+        .account-settings-btn svg {
+            width: 19px;
+            height: 19px;
+        }
+        .account-settings-btn:active {
+            opacity: 0.9;
         }
         .account-avatar-row {
             position: relative;
@@ -2422,9 +2449,25 @@
             </div>
         </div>
     </div>
+    <div class="modal" id="accountSettingsModal" role="dialog" aria-modal="true" aria-labelledby="accountSettingsModalTitle">
+        <div class="modal-sheet">
+            <div class="modal-title" id="accountSettingsModalTitle">設定</div>
+            <p class="modal-text">ログアウトすると、この端末のセッションを終了します。</p>
+            <div class="modal-actions">
+                <button type="button" class="btn" id="accountSettingsCloseBtn">閉じる</button>
+                <button type="button" class="btn btn-danger" id="accountLogoutBtn">ログアウト</button>
+            </div>
+        </div>
+    </div>
     <div class="toast" id="toast">保存しました</div>
     <div id="account" class="content-section">
         <div class="account-profile">
+            <button type="button" class="account-settings-btn" id="accountSettingsBtn" aria-label="設定" title="設定">
+                <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                    <path d="M12 15.5A3.5 3.5 0 1 0 12 8.5a3.5 3.5 0 0 0 0 7Z" stroke="currentColor" stroke-width="2"/>
+                    <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 1-2 0 1.7 1.7 0 0 0-1-.6 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 1 0-2 1.7 1.7 0 0 0 .6-1 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 1 2 0 1.7 1.7 0 0 0 1 .6 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9c0 .38.13.74.36 1.03a1.7 1.7 0 0 1 0 1.94c-.23.29-.36.65-.36 1.03Z" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+            </button>
             <div class="account-avatar-row">
                 <div class="account-avatar" id="accountAvatar" aria-hidden="true">🙂</div>
                 <button type="button" class="account-profile-edit-btn" id="accountProfileEditBtn" aria-label="プロフィールを編集" title="プロフィールを編集">
@@ -5718,6 +5761,33 @@
             return TF.signInWithPopup(TF.auth, provider);
         }
 
+        function openAccountSettingsModal() {
+            var modal = document.getElementById('accountSettingsModal');
+            if (modal) modal.classList.add('open');
+        }
+
+        function closeAccountSettingsModal() {
+            var modal = document.getElementById('accountSettingsModal');
+            if (modal) modal.classList.remove('open');
+        }
+
+        function logoutFirebaseUser() {
+            var TF = tf();
+            if (!TF || !TF.auth || !TF.signOut) {
+                showToast('ログアウトに失敗しました');
+                return;
+            }
+            TF.signOut(TF.auth)
+                .then(function () {
+                    closeAccountSettingsModal();
+                    showToast('ログアウトしました');
+                })
+                .catch(function (err) {
+                    showToast('ログアウトに失敗しました');
+                    console.warn('Teertab logout failed', err);
+                });
+        }
+
         function hydrateAndStartForCurrentUser() {
             var TB = tf();
             var userDocRef = getCurrentUserDocRef();
@@ -5769,6 +5839,7 @@
             if (firebaseAuthUnsub) return;
             firebaseAuthUnsub = TF.onAuthStateChanged(TF.auth, function (user) {
                 if (!user) {
+                    closeAccountSettingsModal();
                     state.auth.userId = '';
                     state.auth.secret = '';
                     state.auth.displayName = '';
@@ -6413,6 +6484,18 @@
             if (accountProfileEditBtn) {
                 accountProfileEditBtn.addEventListener('click', function () {
                     navigateTo('accountProfileEdit');
+                });
+            }
+            var accountSettingsBtn = document.getElementById('accountSettingsBtn');
+            if (accountSettingsBtn) accountSettingsBtn.addEventListener('click', openAccountSettingsModal);
+            var accountSettingsCloseBtn = document.getElementById('accountSettingsCloseBtn');
+            if (accountSettingsCloseBtn) accountSettingsCloseBtn.addEventListener('click', closeAccountSettingsModal);
+            var accountLogoutBtn = document.getElementById('accountLogoutBtn');
+            if (accountLogoutBtn) accountLogoutBtn.addEventListener('click', logoutFirebaseUser);
+            var accountSettingsModal = document.getElementById('accountSettingsModal');
+            if (accountSettingsModal) {
+                accountSettingsModal.addEventListener('click', function (e) {
+                    if (e.target === accountSettingsModal) closeAccountSettingsModal();
                 });
             }
             var profileSaveBtn = document.getElementById('profileSaveBtn');
