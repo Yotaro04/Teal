@@ -37,8 +37,9 @@ window.__TF = {
     deleteField,
     bundleRef,
     userDocRef: (uid) => doc(db, 'users', String(uid || '')),
-    userCardsColRef: (uid) => collection(db, 'users', String(uid || ''), 'cards'),
-    userCardDocRef: (uid, cardId) => doc(db, 'users', String(uid || ''), 'cards', String(cardId || '')),
+    /** 全ユーザー共通の募集カード */
+    postsColRef: () => collection(db, 'posts'),
+    postDocRef: (postId) => doc(db, 'posts', String(postId || '')),
     storageRef: ref,
     uploadString,
     getDownloadURL,

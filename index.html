@@ -2538,7 +2538,7 @@
 <script>
         /**
          * Firebase: firebase-config.js で initializeApp 済み。モジュラー API は teertab-firebase-runtime.mjs が window.__TF に載せる。
-         * Firestore: teertabSync/bundle（共有同期）+ users/{uid}（プロフィール・自端末の募集キャッシュ等）
+         * Firestore: teertabSync/bundle（共有同期）+ posts（全ユーザー共通募集）+ users/{uid}（プロフィール等）
          */
         var teertabFirebaseListenerAttached = false;
         var teertabUserDefaultListenerAttached = false;
@@ -2546,7 +2546,6 @@
         var teertabUserCardsUnsub = null;
         var userDefaultSaveTimer = null;
         var currentUserDocRef = null;
-        var currentUserCardsColRef = null;
         var teertabMainBooted = false;
         var firebaseAuthUnsub = null;
 
@@ -2596,15 +2595,10 @@
             return currentUserDocRef;
         }
 
-        function getCurrentUserCardsColRef() {
+        function getPostsColRef() {
             var TF = tf();
-            if (!TF || !TF.userCardsColRef) return null;
-            var uid = getMyUserId();
-            if (!uid) return null;
-            if (!currentUserCardsColRef || currentUserCardsColRef.id !== 'cards' || currentUserCardsColRef.parent.id !== uid) {
-                currentUserCardsColRef = TF.userCardsColRef(uid);
-            }
-            return currentUserCardsColRef;
+            if (!TF || !TF.postsColRef) return null;
+            return TF.postsColRef();
         }
 
         function setAuthGateVisible(visible, statusText) {
@@ -2799,12 +2793,12 @@
                 }
                 if (Object.keys(patch).length) {
                     return TFm.setDoc(userDocRef, Object.assign({}, patch, { updatedAt: TFm.serverTimestamp() }), { merge: true })
-                        .then(function () { return syncUserCardsReplace(legacyCards); })
+                        .then(function () { return migrateLegacyPostsToFirestore(legacyCards); })
                         .then(done)
                         .catch(done);
                 }
                 if (legacyCards.length) {
-                    return syncUserCardsReplace(legacyCards)
+                    return migrateLegacyPostsToFirestore(legacyCards)
                         .then(done)
                         .catch(done);
                 }
@@ -2852,37 +2846,45 @@
             });
         }
 
-        function applyUserCardsToState(cards) {
+        function applyPostsToState(cards) {
             var nextList = Array.isArray(cards) ? cards.filter(function (v) {
                 return v && typeof v.id === 'string' && v.id.indexOf('vol-user-') === 0;
             }) : [];
-            var nextIds = {};
-            var uid = getMyUserId();
-            nextList.forEach(function (v) {
-                var synced = Object.assign({}, v);
-                if (uid) synced.hostedByUserId = uid;
-                state.vols[synced.id] = synced;
-                state.myHostedVolIds[synced.id] = true;
-                nextIds[synced.id] = true;
+            var idsInPosts = {};
+            var myUid = getMyUserId();
+            nextList.forEach(function (raw) {
+                var v = Object.assign({}, raw);
+                v.id = v.id || raw.id;
+                idsInPosts[v.id] = true;
+                if (v.authorId) v.hostedByUserId = v.authorId;
+                else if (v.hostedByUserId) v.authorId = v.hostedByUserId;
+                var disp = String(v.authorName || v.chatWith || '').trim();
+                if (disp) v.chatWith = disp.slice(0, 80);
+                state.vols[v.id] = v;
             });
-            Object.keys(state.myHostedVolIds || {}).forEach(function (id) {
-                if (!nextIds[id]) {
-                    delete state.myHostedVolIds[id];
-                    if (state.vols[id]) delete state.vols[id];
-                }
+            Object.keys(state.vols || {}).forEach(function (k) {
+                if (k.indexOf('vol-user-') !== 0) return;
+                if (!idsInPosts[k]) delete state.vols[k];
             });
-            state.userDefaultHostedVols = nextList;
+            var mine = nextList.filter(function (v) {
+                return myUid && v.authorId === myUid;
+            });
+            state.userDefaultHostedVols = mine;
+            state.myHostedVolIds = {};
+            mine.forEach(function (v) {
+                if (v && v.id) state.myHostedVolIds[v.id] = true;
+            });
             renderSearchResults();
             renderAccount();
             liveSyncReconcileHomeCards();
             updateHomeEmptyState();
         }
 
-        function fetchUserCardsOnce() {
+        function fetchPostsOnce() {
             var TF = tf();
-            var cardsCol = getCurrentUserCardsColRef();
-            if (!TF || !cardsCol) return Promise.resolve();
-            return TF.getDocs(cardsCol)
+            var col = getPostsColRef();
+            if (!TF || !col) return Promise.resolve();
+            return TF.getDocs(col)
                 .then(function (snap) {
                     var cards = [];
                     snap.forEach(function (d) {
@@ -2890,51 +2892,81 @@
                         card.id = card.id || d.id;
                         cards.push(card);
                     });
-                    applyUserCardsToState(cards);
+                    applyPostsToState(cards);
                 })
                 .catch(function () {});
         }
 
         function attachUserCardsFirestoreListener() {
             var TF = tf();
-            var cardsCol = getCurrentUserCardsColRef();
-            if (!TF || !cardsCol) return;
+            var col = getPostsColRef();
+            if (!TF || !col) return;
             if (typeof teertabUserCardsUnsub === 'function') teertabUserCardsUnsub();
-            teertabUserCardsUnsub = TF.onSnapshot(cardsCol, function (snap) {
+            teertabUserCardsUnsub = TF.onSnapshot(col, function (snap) {
                 var cards = [];
                 snap.forEach(function (d) {
                     var card = d.data() || {};
                     card.id = card.id || d.id;
                     cards.push(card);
                 });
-                applyUserCardsToState(cards);
+                applyPostsToState(cards);
             });
         }
 
-        function syncUserCardsReplace(list) {
+        function upsertPostDocument(v) {
             var TF = tf();
-            var cardsCol = getCurrentUserCardsColRef();
             var uid = getMyUserId();
-            if (!TF || !cardsCol || !uid) return Promise.resolve(false);
-            var safeList = (Array.isArray(list) ? list : []).filter(function (v) {
-                return v && typeof v.id === 'string' && v.id.indexOf('vol-user-') === 0;
-            }).map(function (v) {
-                var out = Object.assign({}, v);
-                out.hostedByUserId = uid;
-                return out;
+            if (!TF || !v || !v.id || !uid || !TF.postDocRef) return;
+            var payload = Object.assign({}, v);
+            payload.authorId = uid;
+            payload.authorName = String(
+                payload.authorName || state.profile.name || state.auth.displayName || ''
+            ).trim().slice(0, 80) || 'ユーザーネーム';
+            payload.hostedByUserId = uid;
+            if (!payload.chatWith) payload.chatWith = payload.authorName;
+            payload.updatedAt = TF.serverTimestamp();
+            TF.setDoc(TF.postDocRef(v.id), payload, { merge: true }).catch(function () {});
+        }
+
+        function migrateLegacyPostsToFirestore(legacyCards) {
+            var TF = tf();
+            var uid = getMyUserId();
+            if (!TF || !uid || !TF.postDocRef || !legacyCards || !legacyCards.length) return Promise.resolve();
+            var name = String(state.profile.name || state.auth.displayName || '').trim().slice(0, 80) || 'ユーザーネーム';
+            var jobs = legacyCards
+                .filter(function (v) {
+                    return v && typeof v.id === 'string' && v.id.indexOf('vol-user-') === 0;
+                })
+                .map(function (v) {
+                    var payload = Object.assign({}, v);
+                    payload.authorId = uid;
+                    payload.authorName = name;
+                    payload.hostedByUserId = uid;
+                    if (!payload.chatWith) payload.chatWith = name;
+                    payload.updatedAt = TF.serverTimestamp();
+                    return TF.setDoc(TF.postDocRef(v.id), payload, { merge: true });
+                });
+            return Promise.all(jobs).catch(function () {});
+        }
+
+        function syncMyPostsToFirestore(clean, prevList) {
+            var TF = tf();
+            var uid = getMyUserId();
+            if (!TF || !uid || !TF.postDocRef) return;
+            var prevIds = {};
+            (prevList || []).forEach(function (v) {
+                if (v && v.id) prevIds[v.id] = true;
             });
-            var nextById = {};
-            safeList.forEach(function (v) { nextById[v.id] = v; });
-            return TF.getDocs(cardsCol).then(function (snap) {
-                var jobs = [];
-                snap.forEach(function (d) {
-                    if (!nextById[d.id]) jobs.push(TF.deleteDoc(TF.userCardDocRef(uid, d.id)));
-                });
-                Object.keys(nextById).forEach(function (id) {
-                    jobs.push(TF.setDoc(TF.userCardDocRef(uid, id), nextById[id], { merge: true }));
-                });
-                return Promise.all(jobs).then(function () { return true; });
-            }).catch(function () { return false; });
+            var nextIds = {};
+            (clean || []).forEach(function (v) {
+                if (v && v.id) nextIds[v.id] = true;
+            });
+            Object.keys(prevIds).forEach(function (id) {
+                if (!nextIds[id]) TF.deleteDoc(TF.postDocRef(id)).catch(function () {});
+            });
+            (clean || []).forEach(function (v) {
+                upsertPostDocument(v);
+            });
         }
 
         function flushUserDefaultDoc() {
@@ -5776,7 +5808,7 @@
                         state.userDefaultHydrated = true;
                         state.userDefaultHostedVols = [];
                     }
-                    return fetchUserCardsOnce();
+                    return fetchPostsOnce();
                 })
                 .then(function () {
                     attachUserDefaultFirestoreListener();
@@ -5819,9 +5851,12 @@
                     state.auth.displayName = '';
                     state.auth.phoneE164 = '';
                     currentUserDocRef = null;
-                    currentUserCardsColRef = null;
                     state.userDefaultHydrated = false;
                     state.userDefaultHostedVols = [];
+                    state.myHostedVolIds = {};
+                    Object.keys(state.vols || {}).forEach(function (k) {
+                        if (k.indexOf('vol-user-') === 0) delete state.vols[k];
+                    });
                     state.dismissedNotifsRemote = {};
                     if (typeof teertabUserDocUnsub === 'function') teertabUserDocUnsub();
                     teertabUserDocUnsub = null;
@@ -5891,9 +5926,10 @@
                 var clean = (list || []).filter(function (v) {
                     return v && typeof v.id === 'string' && v.id.indexOf('vol-user-') === 0;
                 });
+                var prevList = (state.userDefaultHostedVols || []).slice();
                 state.userDefaultHostedVols = clean;
                 if (tf()) {
-                    syncUserCardsReplace(clean);
+                    syncMyPostsToFirestore(clean, prevList);
                     return true;
                 }
                 return false;
@@ -5925,7 +5961,15 @@
             function persistUserVol(v) {
                 if (v && !v.hostedByLocal) v.hostedByLocal = deviceOwnerKey;
                 var authUid = getMyUserId();
-                if (v && authUid) v.hostedByUserId = authUid;
+                if (v && authUid) {
+                    v.hostedByUserId = authUid;
+                    v.authorId = authUid;
+                    if (!v.authorName) {
+                        v.authorName = String(state.profile.name || state.auth.displayName || v.chatWith || '')
+                            .trim()
+                            .slice(0, 80) || 'ユーザーネーム';
+                    }
+                }
                 if (v && v.id) state.myHostedVolIds[v.id] = true;
                 var list = loadUserVols();
                 list = [v].concat(list.filter(function (x) { return x && x.id !== v.id; }));
@@ -6106,8 +6150,11 @@
                     var tags = tagRaw.split(/[\s,、]+/).map(hashTag).filter(Boolean);
 
                     var id = 'vol-user-' + Date.now();
+                    var posterUid = getMyUserId();
                     var v = {
                         id: id,
+                        authorId: posterUid || '',
+                        authorName: me.name || 'ユーザーネーム',
                         hostedByLocal: deviceOwnerKey,
                         thumb: me.avatar,
                         tag: 'New',
