@@ -2812,20 +2812,29 @@
 
         function applyUserDefaultDocToState(data) {
             if (!data || typeof data !== 'object') return;
+            var hasNameField = Object.prototype.hasOwnProperty.call(data, 'name');
+            var hasDisplayNameField = Object.prototype.hasOwnProperty.call(data, 'displayName');
             var displayName = '';
-            if (typeof data.name === 'string' && data.name.trim()) displayName = data.name.trim();
-            else if (typeof data.displayName === 'string' && data.displayName.trim()) displayName = data.displayName.trim();
-            if (displayName) state.profile.name = displayName.slice(0, 80);
+            if (typeof data.displayName === 'string') displayName = data.displayName.trim();
+            else if (typeof data.name === 'string') displayName = data.name.trim();
+            if (hasNameField || hasDisplayNameField) {
+                state.profile.name = displayName ? displayName.slice(0, 80) : '';
+            }
             if (typeof data.avatar === 'string' && data.avatar.trim()) state.profile.avatar = data.avatar.trim().slice(0, 8);
             if (typeof data.bio === 'string') state.profile.bio = data.bio.slice(0, 500);
             if (typeof data.thanksCount === 'number' && isFinite(data.thanksCount) && data.thanksCount >= 0) {
                 state.profile.thanksCount = Math.floor(data.thanksCount);
             }
+            var hasPhotoStorageUrlField = Object.prototype.hasOwnProperty.call(data, 'photoStorageUrl');
+            var hasPhotoURLField = Object.prototype.hasOwnProperty.call(data, 'photoURL');
+            var hasPhotoDataUrlField = Object.prototype.hasOwnProperty.call(data, 'photoDataUrl');
             var pic = '';
             if (typeof data.photoStorageUrl === 'string' && data.photoStorageUrl.trim()) pic = data.photoStorageUrl.trim();
             else if (typeof data.photoURL === 'string' && data.photoURL.trim()) pic = data.photoURL.trim();
             else if (typeof data.photoDataUrl === 'string' && data.photoDataUrl.trim()) pic = data.photoDataUrl.trim();
-            if (pic) state.profile.photoDataUrl = pic;
+            if (hasPhotoStorageUrlField || hasPhotoURLField || hasPhotoDataUrlField) {
+                state.profile.photoDataUrl = pic || '';
+            }
             if (data.dismissedNotifs && typeof data.dismissedNotifs === 'object') {
                 state.dismissedNotifsRemote = Object.assign({}, data.dismissedNotifs);
             }
@@ -3019,7 +3028,7 @@
 
         function flushUserDefaultDoc() {
             var TF = tf();
-            if (!TF) return;
+            if (!TF) return Promise.resolve(false);
             var userDocRef = getCurrentUserDocRef();
             if (!userDocRef) return Promise.resolve(false);
             var url = String(state.profile.photoDataUrl || '').trim();
@@ -3317,33 +3326,31 @@
             state.profile.bio = b ? String(b.value || '').trim().slice(0, 500) : '';
             applyProfileToAccountDom();
             savePersistedProfile();
-            flushUserDefaultDoc().then(function () {
-                refreshAccountViewFromFirestore();
-            });
+            var persistUserDoc = flushUserDefaultDoc();
             syncMyPostAuthorProfileFields();
             syncAuthStorageDisplayNameFromProfile();
             populateProfileEditForm();
             renderAccount();
             renderSearchResults();
-            var fin = function (remoteOk) {
-                if (liveSyncEnabled() && getMyUserId() && remoteOk === false) {
-                    showToast('サーバーへの保存に失敗しました（この端末には保存済みです）');
-                } else {
+            persistUserDoc.then(function (ok) {
+                if (ok) {
+                    refreshAccountViewFromFirestore();
                     showToast('プロフィールを保存しました');
+                } else {
+                    showToast('プロフィール保存に失敗しました');
                 }
                 if (state.viewStack.length && state.viewStack[state.viewStack.length - 1] === 'accountProfileEdit') {
                     goBack();
                 }
-            };
+            });
             if (liveSyncEnabled() && getMyUserId()) {
+                // bundle 側の public 情報更新はベストエフォート（users/{uid} の保存成否とは切り離す）
                 liveSyncPatchProfile({
                     displayName: state.profile.name,
                     bio: state.profile.bio,
                     thanksCount: state.profile.thanksCount,
                     photoDataUrl: state.profile.photoDataUrl || ''
-                }, fin);
-            } else {
-                fin(true);
+                }, function () {});
             }
         }
 
