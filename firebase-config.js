@@ -2,10 +2,11 @@ import { initializeApp } from "firebase/app";
 import { getAnalytics } from "firebase/analytics";
 import { getFirestore } from "firebase/firestore";
 import { getStorage } from "firebase/storage";
+import { getAuth } from "firebase/auth";
 
 // Web アプリ設定。index.html は import map 経由でこのモジュールを読み込みます。
-// Firestore: users/default（プロフィール・hostedVols・dismissedNotifs）+ teertabSync/bundle（共有同期）
-// Storage: users/default/profile.jpg, profilePhotos/*, volImages/*
+// Firestore: users/{uid}（プロフィール・hostedVols・dismissedNotifs）+ teertabSync/bundle（共有同期）
+// Storage: users/{uid}/profile.jpg, profilePhotos/*, volImages/*
 const firebaseConfig = {
   apiKey: "AIzaSyC1a9c04Ffc7FRqarA0uj4up9ksfXAjphw",
   authDomain: "teertab-da748.firebaseapp.com",
@@ -27,4 +28,5 @@ try {
 
 export const db = getFirestore(app);
 export const storage = getStorage(app);
+export const auth = getAuth(app);
 export { app, firebaseConfig };

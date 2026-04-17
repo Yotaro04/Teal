@@ -13,6 +13,7 @@
             "firebase/app": "https://www.gstatic.com/firebasejs/12.12.0/firebase-app.js",
             "firebase/firestore": "https://www.gstatic.com/firebasejs/12.12.0/firebase-firestore.js",
             "firebase/storage": "https://www.gstatic.com/firebasejs/12.12.0/firebase-storage.js",
+            "firebase/auth": "https://www.gstatic.com/firebasejs/12.12.0/firebase-auth.js",
             "firebase/analytics": "https://www.gstatic.com/firebasejs/12.12.0/firebase-analytics.js"
         }
     }
@@ -2148,9 +2149,53 @@
             font-size: 0.95rem;
         }
         .toast.show { display: block; }
+        .auth-gate {
+            min-height: 100dvh;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            padding: 24px;
+            background: var(--bg-base);
+        }
+        .auth-gate.open {
+            display: flex;
+        }
+        .auth-card {
+            width: min(360px, 92vw);
+            background: var(--bg-card);
+            border-radius: 20px;
+            border: 1px solid var(--stroke);
+            padding: 24px;
+            text-align: center;
+        }
+        .auth-card h1 {
+            margin: 0 0 10px;
+            font-size: 1.2rem;
+            font-weight: 800;
+        }
+        .auth-card p {
+            margin: 0 0 18px;
+            color: var(--text-sub);
+            font-size: 0.93rem;
+            line-height: 1.5;
+        }
+        .auth-status {
+            margin-top: 12px;
+            min-height: 1.2em;
+            color: var(--text-sub);
+            font-size: 0.86rem;
+        }
     </style>
 </head>
 <body>
+<div id="authGate" class="auth-gate">
+    <div class="auth-card">
+        <h1>Teertab にログイン</h1>
+        <p>Google アカウントでログインすると、同じアカウントの端末同士でデータが同期されます。</p>
+        <button type="button" class="btn btn-primary" id="googleLoginBtn">Googleでログイン</button>
+        <div class="auth-status" id="authGateStatus"></div>
+    </div>
+</div>
 <div class="app-shell" id="appShell" data-tab="home">
     <div class="header">
         <div class="header-cell--left">
@@ -2471,11 +2516,15 @@
 <script>
         /**
          * Firebase: firebase-config.js で initializeApp 済み。モジュラー API は teertab-firebase-runtime.mjs が window.__TF に載せる。
-         * Firestore: teertabSync/bundle（共有同期）+ users/default（プロフィール・自端末の募集キャッシュ等）
+         * Firestore: teertabSync/bundle（共有同期）+ users/{uid}（プロフィール・自端末の募集キャッシュ等）
          */
         var teertabFirebaseListenerAttached = false;
         var teertabUserDefaultListenerAttached = false;
+        var teertabUserDocUnsub = null;
         var userDefaultSaveTimer = null;
+        var currentUserDocRef = null;
+        var teertabMainBooted = false;
+        var firebaseAuthUnsub = null;
 
         function firebaseSyncMode() {
             try {
@@ -2510,6 +2559,26 @@
 
         function tf() {
             return window.__TF && window.__TF.ready ? window.__TF : null;
+        }
+
+        function getCurrentUserDocRef() {
+            var TF = tf();
+            if (!TF || !TF.userDocRef) return null;
+            var uid = getMyUserId();
+            if (!uid) return null;
+            if (!currentUserDocRef || currentUserDocRef.id !== uid) {
+                currentUserDocRef = TF.userDocRef(uid);
+            }
+            return currentUserDocRef;
+        }
+
+        function setAuthGateVisible(visible, statusText) {
+            var gate = document.getElementById('authGate');
+            var appShell = document.getElementById('appShell');
+            var st = document.getElementById('authGateStatus');
+            if (st) st.textContent = statusText || '';
+            if (gate) gate.classList.toggle('open', !!visible);
+            if (appShell) appShell.style.display = visible ? 'none' : '';
         }
 
         function firebaseSyncActive() {
@@ -2645,7 +2714,10 @@
 
         function migrateLegacyLocalStorageToFirestoreOnce() {
             try {
-                if (!tf() || localStorage.getItem('teertab.firestoreMigrated.v1')) return Promise.resolve();
+                var uid = getMyUserId();
+                if (!tf() || !uid) return Promise.resolve();
+                var migratedKey = 'teertab.firestoreMigrated.' + uid + '.v1';
+                if (localStorage.getItem(migratedKey)) return Promise.resolve();
                 var patch = {};
                 var prof = localStorage.getItem('tealfolder.profile.v1');
                 if (prof) {
@@ -2681,11 +2753,16 @@
                 var TFm = tf();
                 var done = function () {
                     try {
-                        localStorage.setItem('teertab.firestoreMigrated.v1', '1');
+                        localStorage.setItem(migratedKey, '1');
                     } catch (_) {}
                 };
+                var userDocRef = getCurrentUserDocRef();
+                if (!userDocRef) {
+                    done();
+                    return Promise.resolve();
+                }
                 if (Object.keys(patch).length) {
-                    return TFm.setDoc(TFm.userDefaultRef, Object.assign({}, patch, { updatedAt: TFm.serverTimestamp() }), { merge: true })
+                    return TFm.setDoc(userDocRef, Object.assign({}, patch, { updatedAt: TFm.serverTimestamp() }), { merge: true })
                         .then(done)
                         .catch(done);
                 }
@@ -2729,8 +2806,10 @@
         function attachUserDefaultFirestoreListener() {
             var TFu = tf();
             if (!TFu || teertabUserDefaultListenerAttached) return;
+            var userDocRef = getCurrentUserDocRef();
+            if (!userDocRef) return;
             teertabUserDefaultListenerAttached = true;
-            TFu.onSnapshot(TFu.userDefaultRef, function (snap) {
+            teertabUserDocUnsub = TFu.onSnapshot(userDocRef, function (snap) {
                 if (!snap.exists) return;
                 applyUserDefaultDocToState(snap.data());
             });
@@ -2739,6 +2818,8 @@
         function flushUserDefaultDoc() {
             var TF = tf();
             if (!TF) return;
+            var userDocRef = getCurrentUserDocRef();
+            if (!userDocRef) return;
             var url = String(state.profile.photoDataUrl || '').trim();
             var photoStorageUrl = url.indexOf('http') === 0 ? url : '';
             var payload = {
@@ -2758,7 +2839,7 @@
             if (state.dismissedNotifsRemote && typeof state.dismissedNotifsRemote === 'object') {
                 payload.dismissedNotifs = state.dismissedNotifsRemote;
             }
-            TF.setDoc(TF.userDefaultRef, payload, { merge: true }).catch(function () {});
+            TF.setDoc(userDocRef, payload, { merge: true }).catch(function () {});
         }
 
         function savePersistedProfile() {
@@ -2766,7 +2847,7 @@
             if (!TF) return;
             var url = String(state.profile.photoDataUrl || '').trim();
             if (url.indexOf('data:image/') === 0) {
-                teertabUploadDataUrlToStorage('users/default/profile.jpg', url)
+                teertabUploadDataUrlToStorage('users/' + getMyUserId() + '/profile.jpg', url)
                     .then(function (got) {
                         state.profile.photoDataUrl = got;
                         flushUserDefaultDoc();
@@ -3613,6 +3694,10 @@
         function ensureAuthSession(done) {
             if (typeof done !== 'function') done = function () {};
             if (!liveSyncEnabled()) {
+                done();
+                return;
+            }
+            if (firebaseSyncActive() && tf() && state.auth && state.auth.userId && !state.auth.secret) {
                 done();
                 return;
             }
@@ -5437,6 +5522,83 @@
             showToast('参加申請しました。募集者に参加申請通知が届きます。');
         }
 
+        function signInWithGoogle() {
+            var TF = tf();
+            if (!TF || !TF.auth) return Promise.reject(new Error('auth not ready'));
+            var provider = new TF.GoogleAuthProvider();
+            provider.setCustomParameters({ prompt: 'select_account' });
+            return TF.signInWithPopup(TF.auth, provider);
+        }
+
+        function hydrateAndStartForCurrentUser() {
+            var TB = tf();
+            var userDocRef = getCurrentUserDocRef();
+            if (!TB || !userDocRef) return;
+            migrateLegacyLocalStorageToFirestoreOnce()
+                .then(function () {
+                    return TB.getDoc(userDocRef);
+                })
+                .then(function (snap) {
+                    if (snap.exists) applyUserDefaultDocToState(snap.data());
+                    else {
+                        state.userDefaultHydrated = true;
+                        state.userDefaultHostedVols = [];
+                    }
+                    attachUserDefaultFirestoreListener();
+                    if (!teertabMainBooted) {
+                        teertabMainBooted = true;
+                        teertabRunMainAfterUserDefaultHydrate();
+                    }
+                })
+                .catch(function () {
+                    attachUserDefaultFirestoreListener();
+                    if (!teertabMainBooted) {
+                        teertabMainBooted = true;
+                        teertabRunMainAfterUserDefaultHydrate();
+                    }
+                });
+        }
+
+        function initFirebaseAuthGate() {
+            var TF = tf();
+            if (!TF || !TF.auth) return;
+            setAuthGateVisible(true, 'ログイン状態を確認中...');
+            var loginBtn = document.getElementById('googleLoginBtn');
+            if (loginBtn) {
+                loginBtn.addEventListener('click', function () {
+                    setAuthGateVisible(true, 'Google ログインを開いています...');
+                    signInWithGoogle().catch(function (err) {
+                        var msg = (err && err.message) ? String(err.message) : '';
+                        setAuthGateVisible(true, msg ? ('ログインに失敗しました: ' + msg) : 'ログインに失敗しました');
+                    });
+                });
+            }
+            if (firebaseAuthUnsub) return;
+            firebaseAuthUnsub = TF.onAuthStateChanged(TF.auth, function (user) {
+                if (!user) {
+                    state.auth.userId = '';
+                    state.auth.secret = '';
+                    state.auth.displayName = '';
+                    state.auth.phoneE164 = '';
+                    currentUserDocRef = null;
+                    state.userDefaultHydrated = false;
+                    state.userDefaultHostedVols = [];
+                    state.dismissedNotifsRemote = {};
+                    if (typeof teertabUserDocUnsub === 'function') teertabUserDocUnsub();
+                    teertabUserDocUnsub = null;
+                    teertabUserDefaultListenerAttached = false;
+                    setAuthGateVisible(true, '');
+                    return;
+                }
+                state.auth.userId = user.uid;
+                state.auth.secret = '';
+                state.auth.displayName = user.displayName || '';
+                state.auth.phoneE164 = '';
+                setAuthGateVisible(false, '');
+                hydrateAndStartForCurrentUser();
+            });
+        }
+
         (function teertabAppBoot() {
             if (!tf()) {
                 if (!window.__teertabTfSpin) window.__teertabTfSpin = 0;
@@ -5446,28 +5608,11 @@
                     return;
                 }
                 console.warn('Teertab: Firebase が読み込めませんでした（HTTPS で開き import map を確認してください）');
-                teertabRunMainAfterUserDefaultHydrate();
+                setAuthGateVisible(true, 'Firebase の読み込みに失敗しました');
                 return;
             }
             initTeertabFirebase();
-            var TB = tf();
-            migrateLegacyLocalStorageToFirestoreOnce()
-                .then(function () {
-                    return TB.getDoc(TB.userDefaultRef);
-                })
-                .then(function (snap) {
-                    if (snap.exists) applyUserDefaultDocToState(snap.data());
-                    else {
-                        state.userDefaultHydrated = true;
-                        state.userDefaultHostedVols = [];
-                    }
-                    attachUserDefaultFirestoreListener();
-                    teertabRunMainAfterUserDefaultHydrate();
-                })
-                .catch(function () {
-                    attachUserDefaultFirestoreListener();
-                    teertabRunMainAfterUserDefaultHydrate();
-                });
+            initFirebaseAuthGate();
         })();
 
         function teertabRunMainAfterUserDefaultHydrate() {
