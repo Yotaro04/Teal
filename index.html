@@ -7,6 +7,17 @@
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <title>ホーム</title>
+    <script type="importmap">
+    {
+        "imports": {
+            "firebase/app": "https://www.gstatic.com/firebasejs/12.12.0/firebase-app.js",
+            "firebase/firestore": "https://www.gstatic.com/firebasejs/12.12.0/firebase-firestore.js",
+            "firebase/storage": "https://www.gstatic.com/firebasejs/12.12.0/firebase-storage.js",
+            "firebase/analytics": "https://www.gstatic.com/firebasejs/12.12.0/firebase-analytics.js"
+        }
+    }
+    </script>
+    <script type="module" src="./teertab-firebase-runtime.mjs"></script>
     <style>
         :root {
             --bg-base: #0f0f10;
@@ -2458,6 +2469,139 @@
     </nav>
 </div>
 <script>
+        /**
+         * Firebase: firebase-config.js で initializeApp 済み。モジュラー API は teertab-firebase-runtime.mjs が window.__TF に載せる。
+         * Firestore: teertabSync/bundle（共有同期）+ users/default（プロフィール・自端末の募集キャッシュ等）
+         */
+        var teertabFirebaseListenerAttached = false;
+        var teertabUserDefaultListenerAttached = false;
+        var userDefaultSaveTimer = null;
+
+        function firebaseSyncMode() {
+            try {
+                var q = new URLSearchParams(window.location.search);
+                if (q.get('sync') === 'firebase' || q.get('firebase') === '1') return true;
+            } catch (_) {}
+            try {
+                return localStorage.getItem('tealfolder.syncMode') === 'firebase';
+            } catch (_) {
+                return false;
+            }
+        }
+
+        /** Render 本番など: クエリなしでも Firebase 同期をオンにする（?sync=auto は除外して HTTP 同期を残す） */
+        function firebaseSyncHostAuto() {
+            try {
+                if (window.location.protocol === 'file:') return false;
+                var q = new URLSearchParams(window.location.search);
+                var syncQ = q.get('sync');
+                if (syncQ === 'auto' || syncQ === '1') return false;
+                var h = String(window.location.hostname || '');
+                if (!h || h === 'localhost' || h === '127.0.0.1') return false;
+                return h.indexOf('onrender.com') !== -1;
+            } catch (_) {
+                return false;
+            }
+        }
+
+        function firebaseSyncBackendWanted() {
+            return firebaseSyncMode() || firebaseSyncHostAuto();
+        }
+
+        function tf() {
+            return window.__TF && window.__TF.ready ? window.__TF : null;
+        }
+
+        function firebaseSyncActive() {
+            if (!tf() || !tf().bundleRef) return false;
+            if (firebaseSyncHostAuto()) return true;
+            return firebaseSyncMode() && !getLiveSyncBase();
+        }
+
+        function initTeertabFirebase() {
+            if (!firebaseSyncBackendWanted()) return false;
+            if (!tf()) return false;
+            return true;
+        }
+
+        function attachFirebaseBundleListener() {
+            var TF = tf();
+            if (!firebaseSyncActive() || !TF || teertabFirebaseListenerAttached) return;
+            teertabFirebaseListenerAttached = true;
+            TF.onSnapshot(TF.bundleRef, function (snap) {
+                if (!snap.exists) return;
+                var data = snap.data();
+                if (!data) return;
+                liveSyncApplyBundle(data);
+                if (!liveSyncConnectedOnce) {
+                    liveSyncConnectedOnce = true;
+                    showToast('Firebase（Firestore）とつながりました');
+                }
+            });
+        }
+
+        function randomTealToken(prefix) {
+            return prefix + Date.now() + '-' + Math.random().toString(36).slice(2, 11);
+        }
+
+        function publicProfilePhotoUrl(pub) {
+            if (!pub) return '';
+            var s = pub.photoStorageUrl || pub.photoDataUrl;
+            if (typeof s !== 'string') return '';
+            s = s.trim();
+            if (!s) return '';
+            if (s.indexOf('data:image/') === 0) return s;
+            if (s.indexOf('https://') === 0 || s.indexOf('http://') === 0) return s;
+            return '';
+        }
+
+        function teertabParseDataUrlForUpload(dataUrl) {
+            var s = String(dataUrl || '');
+            var m = s.match(/^data:(image\/[a-z0-9.+-]+);base64,(.+)$/i);
+            if (!m) return null;
+            return { contentType: m[1], base64: m[2] };
+        }
+
+        function teertabUploadDataUrlToStorage(path, dataUrl) {
+            var TF = tf();
+            if (!TF) return Promise.reject(new Error('no storage'));
+            var parsed = teertabParseDataUrlForUpload(dataUrl);
+            if (!parsed) return Promise.reject(new Error('bad data url'));
+            var r = TF.storageRef(TF.storage, path);
+            return TF.uploadString(r, parsed.base64, 'base64', { contentType: parsed.contentType }).then(function () {
+                return TF.getDownloadURL(r);
+            });
+        }
+
+        function profilePhotoInSyncWithPublic(localPhoto, pub) {
+            var srv = publicProfilePhotoUrl(pub);
+            var loc = String(localPhoto || '').trim();
+            if (!loc && !srv) return true;
+            if (loc === srv) return true;
+            if (loc.indexOf('data:image/') === 0 && srv && (srv.indexOf('https://') === 0 || srv.indexOf('http://') === 0)) {
+                return true;
+            }
+            return false;
+        }
+
+        function teertabFirestoreEnsureBundleThenUpdate(fields) {
+            var TF = tf();
+            if (!TF) return Promise.reject(new Error('no bundle ref'));
+            return TF.getDoc(TF.bundleRef).then(function (snap) {
+                if (!snap.exists) {
+                    return TF.setDoc(TF.bundleRef, {
+                        vols: {},
+                        notifications: [],
+                        dmThreads: {},
+                        usersPublic: {}
+                    }).then(function () {
+                        return TF.updateDoc(TF.bundleRef, fields);
+                    });
+                }
+                return TF.updateDoc(TF.bundleRef, fields);
+            });
+        }
+
         var state = {
             viewStack: ['home'],
             currentDetailId: '',
@@ -2478,7 +2622,10 @@
             vols: {},
             threads: [],
             history: [],
-            notifications: []
+            notifications: [],
+            userDefaultHydrated: false,
+            userDefaultHostedVols: [],
+            dismissedNotifsRemote: {}
         };
 
         /** true にするとアカウントに「同期ログイン」（電話番号）を出す。準備中は false のまま */
@@ -2496,40 +2643,143 @@
             } catch (_) {}
         }
 
-        function loadPersistedProfile() {
+        function migrateLegacyLocalStorageToFirestoreOnce() {
             try {
-                var raw = localStorage.getItem('tealfolder.profile.v1');
-                if (!raw) return;
-                var o = JSON.parse(raw);
-                if (!o || typeof o !== 'object') return;
-                if (typeof o.name === 'string' && o.name.trim()) state.profile.name = o.name.trim().slice(0, 80);
-                if (typeof o.avatar === 'string' && o.avatar.trim()) state.profile.avatar = o.avatar.trim().slice(0, 8);
-                if (typeof o.bio === 'string') state.profile.bio = o.bio.slice(0, 500);
-                if (typeof o.photoDataUrl === 'string' && o.photoDataUrl.indexOf('data:image/') === 0) {
-                    state.profile.photoDataUrl = o.photoDataUrl;
+                if (!tf() || localStorage.getItem('teertab.firestoreMigrated.v1')) return Promise.resolve();
+                var patch = {};
+                var prof = localStorage.getItem('tealfolder.profile.v1');
+                if (prof) {
+                    try {
+                        var o = JSON.parse(prof);
+                        if (o && typeof o === 'object') {
+                            if (typeof o.name === 'string' && o.name.trim()) patch.name = o.name.trim().slice(0, 80);
+                            if (typeof o.avatar === 'string' && o.avatar.trim()) patch.avatar = o.avatar.trim().slice(0, 8);
+                            if (typeof o.bio === 'string') patch.bio = o.bio.slice(0, 500);
+                            if (typeof o.thanksCount === 'number' && isFinite(o.thanksCount) && o.thanksCount >= 0) {
+                                patch.thanksCount = Math.floor(o.thanksCount);
+                            }
+                            if (typeof o.photoDataUrl === 'string' && o.photoDataUrl.indexOf('http') === 0) {
+                                patch.photoStorageUrl = o.photoDataUrl.trim();
+                            }
+                        }
+                    } catch (_) {}
                 }
-                if (typeof o.thanksCount === 'number' && isFinite(o.thanksCount) && o.thanksCount >= 0) {
-                    state.profile.thanksCount = Math.floor(o.thanksCount);
-                } else if (Object.prototype.hasOwnProperty.call(o, 'thanksCount')) {
-                    /* ignore malformed */
-                } else {
-                    state.profile.thanksCount = 10;
+                var vols = localStorage.getItem('tealfolder.userVols.v1');
+                if (vols) {
+                    try {
+                        var arr = JSON.parse(vols);
+                        if (Array.isArray(arr)) patch.hostedVols = arr;
+                    } catch (_) {}
                 }
-            } catch (_) {}
+                var dis = localStorage.getItem('tealfolder.dismissedNotifs.v1');
+                if (dis) {
+                    try {
+                        var m = JSON.parse(dis);
+                        if (m && typeof m === 'object') patch.dismissedNotifs = m;
+                    } catch (_) {}
+                }
+                var TFm = tf();
+                var done = function () {
+                    try {
+                        localStorage.setItem('teertab.firestoreMigrated.v1', '1');
+                    } catch (_) {}
+                };
+                if (Object.keys(patch).length) {
+                    return TFm.setDoc(TFm.userDefaultRef, Object.assign({}, patch, { updatedAt: TFm.serverTimestamp() }), { merge: true })
+                        .then(done)
+                        .catch(done);
+                }
+                done();
+                return Promise.resolve();
+            } catch (_) {
+                return Promise.resolve();
+            }
+        }
+
+        function applyUserDefaultDocToState(data) {
+            if (!data || typeof data !== 'object') return;
+            if (typeof data.name === 'string') state.profile.name = data.name.trim().slice(0, 80);
+            if (typeof data.avatar === 'string' && data.avatar.trim()) state.profile.avatar = data.avatar.trim().slice(0, 8);
+            if (typeof data.bio === 'string') state.profile.bio = data.bio.slice(0, 500);
+            if (typeof data.thanksCount === 'number' && isFinite(data.thanksCount) && data.thanksCount >= 0) {
+                state.profile.thanksCount = Math.floor(data.thanksCount);
+            }
+            var pic = '';
+            if (typeof data.photoStorageUrl === 'string' && data.photoStorageUrl.trim()) pic = data.photoStorageUrl.trim();
+            else if (typeof data.photoDataUrl === 'string' && data.photoDataUrl.trim()) pic = data.photoDataUrl.trim();
+            if (pic) state.profile.photoDataUrl = pic;
+            if (data.dismissedNotifs && typeof data.dismissedNotifs === 'object') {
+                state.dismissedNotifsRemote = Object.assign({}, data.dismissedNotifs);
+            }
+            if (Array.isArray(data.hostedVols)) {
+                state.userDefaultHostedVols = data.hostedVols.filter(function (v) {
+                    return v && typeof v.id === 'string' && v.id.indexOf('vol-user-') === 0;
+                });
+            }
+            state.userDefaultHydrated = true;
+            applyProfileToAccountDom();
+            if (typeof liveSyncReconcileHomeCards === 'function') liveSyncReconcileHomeCards();
+            renderProfilePhotoPreview();
+            if (typeof refreshOwnHomeCardIcons === 'function') refreshOwnHomeCardIcons();
+            if (typeof refreshAllHomeCardIcons === 'function') refreshAllHomeCardIcons();
+            renderAccount();
+            renderSearchResults();
+        }
+
+        function attachUserDefaultFirestoreListener() {
+            var TFu = tf();
+            if (!TFu || teertabUserDefaultListenerAttached) return;
+            teertabUserDefaultListenerAttached = true;
+            TFu.onSnapshot(TFu.userDefaultRef, function (snap) {
+                if (!snap.exists) return;
+                applyUserDefaultDocToState(snap.data());
+            });
+        }
+
+        function flushUserDefaultDoc() {
+            var TF = tf();
+            if (!TF) return;
+            var url = String(state.profile.photoDataUrl || '').trim();
+            var photoStorageUrl = url.indexOf('http') === 0 ? url : '';
+            var payload = {
+                name: state.profile.name || '',
+                avatar: state.profile.avatar || '🙂',
+                bio: state.profile.bio || '',
+                thanksCount:
+                    typeof state.profile.thanksCount === 'number' && isFinite(state.profile.thanksCount)
+                        ? Math.max(0, Math.floor(state.profile.thanksCount))
+                        : 10,
+                photoStorageUrl: photoStorageUrl,
+                updatedAt: TF.serverTimestamp()
+            };
+            if (state.userDefaultHydrated && Array.isArray(state.userDefaultHostedVols)) {
+                payload.hostedVols = state.userDefaultHostedVols;
+            }
+            if (state.dismissedNotifsRemote && typeof state.dismissedNotifsRemote === 'object') {
+                payload.dismissedNotifs = state.dismissedNotifsRemote;
+            }
+            TF.setDoc(TF.userDefaultRef, payload, { merge: true }).catch(function () {});
         }
 
         function savePersistedProfile() {
-            try {
-                localStorage.setItem('tealfolder.profile.v1', JSON.stringify({
-                    name: state.profile.name,
-                    avatar: state.profile.avatar,
-                    bio: state.profile.bio || '',
-                    photoDataUrl: state.profile.photoDataUrl || '',
-                    thanksCount: typeof state.profile.thanksCount === 'number' && isFinite(state.profile.thanksCount)
-                        ? Math.max(0, Math.floor(state.profile.thanksCount))
-                        : 10
-                }));
-            } catch (_) {}
+            var TF = tf();
+            if (!TF) return;
+            var url = String(state.profile.photoDataUrl || '').trim();
+            if (url.indexOf('data:image/') === 0) {
+                teertabUploadDataUrlToStorage('users/default/profile.jpg', url)
+                    .then(function (got) {
+                        state.profile.photoDataUrl = got;
+                        flushUserDefaultDoc();
+                    })
+                    .catch(function () {
+                        flushUserDefaultDoc();
+                    });
+                return;
+            }
+            clearTimeout(userDefaultSaveTimer);
+            userDefaultSaveTimer = setTimeout(function () {
+                flushUserDefaultDoc();
+            }, 100);
         }
 
         function persistProfileThanksCount() {
@@ -2547,11 +2797,7 @@
         }
 
         function hasSavedProfileInStorage() {
-            try {
-                return !!localStorage.getItem('tealfolder.profile.v1');
-            } catch (_) {
-                return false;
-            }
+            return !!(state.userDefaultHydrated && state.profile.name && String(state.profile.name).trim());
         }
 
         function applyProfileToAccountDom() {
@@ -2587,7 +2833,7 @@
             var clrBtn = document.getElementById('profileEditPhotoClear');
             if (!frame || !img) return;
             var src = String(state.profile.photoDataUrl || '');
-            if (src && src.indexOf('data:image/') === 0) {
+            if (src && (src.indexOf('data:image/') === 0 || src.indexOf('https://') === 0 || src.indexOf('http://') === 0)) {
                 img.src = src;
                 frame.classList.add('has-image');
                 if (clrBtn) {
@@ -2638,8 +2884,68 @@
 
         function liveSyncPatchProfile(patch, done) {
             if (typeof done !== 'function') done = function () {};
+            var uid = getMyUserId();
+            if (!uid) {
+                done(true);
+                return;
+            }
+            if (firebaseSyncActive() && tf()) {
+                var TF = tf();
+                TF.getDoc(TF.bundleRef).then(function (snap) {
+                    var data = snap.exists ? snap.data() : {};
+                    var usersPublic = (data && data.usersPublic) || {};
+                    var cur = usersPublic[uid] || {};
+                    var next = {
+                        displayName:
+                            patch.displayName != null
+                                ? String(patch.displayName || '').trim().slice(0, 80)
+                                : (cur.displayName || ''),
+                        bio: patch.bio != null ? String(patch.bio || '').trim().slice(0, 500) : (cur.bio || ''),
+                        thanksCount:
+                            patch.thanksCount != null
+                                ? Math.max(0, Math.floor(Number(patch.thanksCount)))
+                                : typeof cur.thanksCount === 'number' && isFinite(cur.thanksCount)
+                                  ? cur.thanksCount
+                                  : 10,
+                        photoDataUrl: cur.photoDataUrl || '',
+                        photoStorageUrl: cur.photoStorageUrl || ''
+                    };
+                    var photoPromise = Promise.resolve(null);
+                    if (patch.photoDataUrl != null) {
+                        var raw = String(patch.photoDataUrl || '').trim();
+                        if (!raw) {
+                            next.photoDataUrl = '';
+                            next.photoStorageUrl = '';
+                        } else if (raw.indexOf('data:image/') === 0) {
+                            if (raw.length > 12000000) {
+                                done(false);
+                                return;
+                            }
+                            photoPromise = teertabUploadDataUrlToStorage('profilePhotos/' + uid + '.jpg', raw).then(function (url) {
+                                next.photoDataUrl = '';
+                                next.photoStorageUrl = url;
+                            });
+                        } else if (raw.indexOf('https://') === 0 || raw.indexOf('http://') === 0) {
+                            next.photoStorageUrl = raw;
+                            next.photoDataUrl = '';
+                        } else {
+                            done(false);
+                            return;
+                        }
+                    }
+                    photoPromise
+                        .then(function () {
+                            var upd = {};
+                            upd['usersPublic.' + uid] = next;
+                            return teertabFirestoreEnsureBundleThenUpdate(upd);
+                        })
+                        .then(function () { done(true); })
+                        .catch(function () { done(false); });
+                }).catch(function () { done(false); });
+                return;
+            }
             var base = getLiveSyncBase();
-            if (!base || !getMyUserId()) {
+            if (!base) {
                 done(true);
                 return;
             }
@@ -2664,24 +2970,32 @@
 
         function syncedPhotoForUserId(uid) {
             if (!uid || !state.usersPublic || !state.usersPublic[uid]) return '';
-            var p = state.usersPublic[uid];
-            var src = p && typeof p.photoDataUrl === 'string' ? p.photoDataUrl : '';
-            return src.indexOf('data:image/') === 0 ? src : '';
+            return publicProfilePhotoUrl(state.usersPublic[uid]);
         }
 
         function syncMyPhotoToServerIfNeeded() {
             if (!liveSyncEnabled() || !getMyUserId()) return;
             var localPhoto = String(state.profile.photoDataUrl || '');
-            var serverPhoto = syncedPhotoForUserId(getMyUserId());
-            if (localPhoto === serverPhoto) return;
+            var myUid = getMyUserId();
+            var pub = state.usersPublic && state.usersPublic[myUid];
+            if (firebaseSyncActive() && profilePhotoInSyncWithPublic(localPhoto, pub)) return;
+            if (!firebaseSyncActive()) {
+                var serverPhoto = syncedPhotoForUserId(myUid);
+                if (localPhoto === serverPhoto) return;
+            }
             var key = localPhoto || '__empty__';
             if (state._lastPhotoSyncAttemptKey === key) return;
             state._lastPhotoSyncAttemptKey = key;
             liveSyncPatchProfile({ photoDataUrl: localPhoto }, function (ok) {
                 if (!ok) return;
                 if (!state.usersPublic) state.usersPublic = {};
-                if (!state.usersPublic[getMyUserId()]) state.usersPublic[getMyUserId()] = {};
-                state.usersPublic[getMyUserId()].photoDataUrl = localPhoto;
+                var u = getMyUserId();
+                if (!state.usersPublic[u]) state.usersPublic[u] = {};
+                if (firebaseSyncActive()) {
+                    state.usersPublic[u].photoDataUrl = '';
+                } else {
+                    state.usersPublic[u].photoDataUrl = localPhoto;
+                }
             });
         }
 
@@ -3326,7 +3640,80 @@
                 done();
                 return;
             }
+            if (firebaseSyncActive() && tf()) {
+                var TFreg = tf();
+                var userId = randomTealToken('usr-');
+                var secret = randomTealToken('sec-');
+                state.auth.userId = userId;
+                state.auth.secret = secret;
+                state.auth.displayName = dn.slice(0, 80);
+                state.auth.phoneE164 = '';
+                if (state.auth.displayName && !hasSavedProfileInStorage()) {
+                    state.profile.name = state.auth.displayName;
+                    applyProfileToAccountDom();
+                }
+                persistTealAuthToStorage();
+                var photo = String(state.profile.photoDataUrl || '');
+                function commitRegister(pub) {
+                    return TFreg.runTransaction(TFreg.db, function (transaction) {
+                        return transaction.get(TFreg.bundleRef).then(function (snap) {
+                            if (!snap.exists) {
+                                var o = {};
+                                o[userId] = pub;
+                                transaction.set(TFreg.bundleRef, {
+                                    vols: {},
+                                    notifications: [],
+                                    dmThreads: {},
+                                    usersPublic: o
+                                });
+                            } else {
+                                var upd = {};
+                                upd['usersPublic.' + userId] = pub;
+                                transaction.update(TFreg.bundleRef, upd);
+                            }
+                        });
+                    });
+                }
+                if (photo.indexOf('data:image/') === 0) {
+                    teertabUploadDataUrlToStorage('profilePhotos/' + userId + '.jpg', photo)
+                        .then(function (url) {
+                            return commitRegister({
+                                displayName: state.auth.displayName,
+                                bio: String(state.profile.bio || '').trim().slice(0, 500),
+                                thanksCount: Math.max(0, Math.floor(Number(state.profile.thanksCount) || 10)),
+                                photoDataUrl: '',
+                                photoStorageUrl: url
+                            });
+                        })
+                        .catch(function () {
+                            return commitRegister({
+                                displayName: state.auth.displayName,
+                                bio: String(state.profile.bio || '').trim().slice(0, 500),
+                                thanksCount: Math.max(0, Math.floor(Number(state.profile.thanksCount) || 10)),
+                                photoDataUrl: '',
+                                photoStorageUrl: ''
+                            });
+                        })
+                        .then(function () { done(); })
+                        .catch(function () { done(); });
+                } else {
+                    commitRegister({
+                        displayName: state.auth.displayName,
+                        bio: String(state.profile.bio || '').trim().slice(0, 500),
+                        thanksCount: Math.max(0, Math.floor(Number(state.profile.thanksCount) || 10)),
+                        photoDataUrl: '',
+                        photoStorageUrl: ''
+                    })
+                        .then(function () { done(); })
+                        .catch(function () { done(); });
+                }
+                return;
+            }
             var base = getLiveSyncBase();
+            if (!base) {
+                done();
+                return;
+            }
             fetch(base + '/api/auth/register', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -3378,7 +3765,7 @@
         }
 
         function liveSyncEnabled() {
-            return !!getLiveSyncBase();
+            return !!getLiveSyncBase() || firebaseSyncActive();
         }
 
         function liveSyncRebuildMyHostedIds() {
@@ -3478,24 +3865,96 @@
         }
 
         function liveSyncPostVol(v) {
+            if (firebaseSyncActive() && tf() && v && v.id) {
+                var copy = Object.assign({}, v);
+                var w = {};
+                if (copy.image && copy.image.indexOf('data:image/') === 0) {
+                    teertabUploadDataUrlToStorage('volImages/' + copy.id + '.jpg', copy.image)
+                        .then(function (url) {
+                            copy.image = url;
+                            w['vols.' + copy.id] = copy;
+                            return teertabFirestoreEnsureBundleThenUpdate(w);
+                        })
+                        .catch(function (e) {
+                            console.warn('Teertab vol image upload', e);
+                            copy.image = '';
+                            w['vols.' + copy.id] = copy;
+                            return teertabFirestoreEnsureBundleThenUpdate(w);
+                        });
+                } else {
+                    w['vols.' + copy.id] = copy;
+                    teertabFirestoreEnsureBundleThenUpdate(w).catch(function () {});
+                }
+                return;
+            }
             var base = getLiveSyncBase();
             if (!base || !v) return;
             fetch(base + '/api/vols', { method: 'POST', headers: liveSyncHeaders(), body: JSON.stringify(v) }).catch(function () {});
         }
 
         function liveSyncDeleteVolRemote(id) {
+            var TFd = tf();
+            if (firebaseSyncActive() && TFd && id) {
+                var w = {};
+                w['vols.' + id] = TFd.deleteField();
+                TFd.updateDoc(TFd.bundleRef, w).catch(function () {});
+                return;
+            }
             var base = getLiveSyncBase();
             if (!base || !id) return;
             fetch(base + '/api/vols/' + encodeURIComponent(id), { method: 'DELETE', headers: liveSyncHeaders() }).catch(function () {});
         }
 
         function liveSyncPostNotification(n) {
+            var TFn = tf();
+            if (firebaseSyncActive() && TFn && n) {
+                TFn.runTransaction(TFn.db, function (transaction) {
+                    return transaction.get(TFn.bundleRef).then(function (snap) {
+                        var arr;
+                        if (!snap.exists) {
+                            arr = [n];
+                            transaction.set(TFn.bundleRef, {
+                                vols: {},
+                                notifications: arr,
+                                dmThreads: {},
+                                usersPublic: {}
+                            });
+                        } else {
+                            arr = Array.isArray(snap.data().notifications) ? snap.data().notifications.slice() : [];
+                            arr.unshift(n);
+                            if (arr.length > 200) arr = arr.slice(0, 200);
+                            transaction.update(TFn.bundleRef, { notifications: arr });
+                        }
+                    });
+                }).catch(function () {});
+                return;
+            }
             var base = getLiveSyncBase();
             if (!base || !n) return;
             fetch(base + '/api/notifications', { method: 'POST', headers: liveSyncHeaders(), body: JSON.stringify(n) }).catch(function () {});
         }
 
         function liveSyncPatchNotification(id, patch) {
+            var TFp = tf();
+            if (firebaseSyncActive() && TFp && id) {
+                TFp.getDoc(TFp.bundleRef).then(function (pre) {
+                    if (!pre.exists) return;
+                    return TFp.runTransaction(TFp.db, function (transaction) {
+                        return transaction.get(TFp.bundleRef).then(function (snap) {
+                            if (!snap.exists) return;
+                            var arr = Array.isArray(snap.data().notifications) ? snap.data().notifications.slice() : [];
+                            for (var i = 0; i < arr.length; i++) {
+                                if (arr[i] && arr[i].id === id) {
+                                    arr[i] = Object.assign({}, arr[i], patch || {});
+                                    break;
+                                }
+                            }
+                            transaction.update(TFp.bundleRef, { notifications: arr });
+                        });
+                    });
+                }).catch(function () {});
+                return;
+            }
             var base = getLiveSyncBase();
             if (!base || !id) return;
             fetch(base + '/api/notifications/' + encodeURIComponent(id), {
@@ -3506,6 +3965,21 @@
         }
 
         function liveSyncPruneNotificationsForVol(volId) {
+            var TFpr = tf();
+            if (firebaseSyncActive() && TFpr && volId) {
+                TFpr.getDoc(TFpr.bundleRef).then(function (pre) {
+                    if (!pre.exists) return;
+                    return TFpr.runTransaction(TFpr.db, function (transaction) {
+                        return transaction.get(TFpr.bundleRef).then(function (snap) {
+                            if (!snap.exists) return;
+                            var arr = Array.isArray(snap.data().notifications) ? snap.data().notifications : [];
+                            var next = arr.filter(function (n) { return !n || n.volId !== volId; });
+                            transaction.update(TFpr.bundleRef, { notifications: next });
+                        });
+                    });
+                }).catch(function () {});
+                return;
+            }
             var base = getLiveSyncBase();
             if (!base || !volId) return;
             fetch(base + '/api/notifications/prune-vol', {
@@ -3516,6 +3990,56 @@
         }
 
         function liveSyncPostDmAppend(threadKey, message) {
+            var TFdm = tf();
+            if (firebaseSyncActive() && TFdm && threadKey && message) {
+                var tk = String(threadKey);
+                TFdm.runTransaction(TFdm.db, function (transaction) {
+                    return transaction.get(TFdm.bundleRef).then(function (snap) {
+                        var dm;
+                        var data = snap.exists ? snap.data() : null;
+                        if (!snap.exists) {
+                            dm = {};
+                        } else {
+                            dm =
+                                data.dmThreads && typeof data.dmThreads === 'object'
+                                    ? JSON.parse(JSON.stringify(data.dmThreads))
+                                    : {};
+                        }
+                        var bucket = dm[tk] && typeof dm[tk] === 'object' ? dm[tk] : { messages: [] };
+                        var arr = Array.isArray(bucket.messages) ? bucket.messages.slice() : [];
+                        var mid = message && message.id ? String(message.id) : '';
+                        if (mid && arr.some(function (x) { return x && x.id === mid; })) {
+                            if (snap.exists) {
+                                transaction.update(TFdm.bundleRef, {
+                                    dmThreads: data.dmThreads || {}
+                                });
+                            }
+                            return;
+                        }
+                        arr.push({
+                            id: mid || randomTealToken('dm-'),
+                            device: String((message && message.device) || ''),
+                            name: String((message && message.name) || ''),
+                            fromUserId: String((message && message.fromUserId) || ''),
+                            text: String((message && message.text) || '').slice(0, 8000),
+                            at: message && typeof message.at === 'number' ? message.at : Date.now()
+                        });
+                        if (arr.length > 500) arr.splice(0, arr.length - 500);
+                        dm[tk] = { messages: arr };
+                        if (!snap.exists) {
+                            transaction.set(TFdm.bundleRef, {
+                                vols: {},
+                                notifications: [],
+                                dmThreads: dm,
+                                usersPublic: {}
+                            });
+                        } else {
+                            transaction.update(TFdm.bundleRef, { dmThreads: dm });
+                        }
+                    });
+                }).catch(function () {});
+                return;
+            }
             var base = getLiveSyncBase();
             if (!base || !threadKey || !message) return;
             fetch(base + '/api/dm/append', {
@@ -3618,6 +4142,27 @@
 
         function liveSyncClearDmRemote(threadKey, all) {
             if (!liveSyncEnabled()) return;
+            var TFclr = tf();
+            if (firebaseSyncActive() && TFclr) {
+                if (all) {
+                    TFclr.updateDoc(TFclr.bundleRef, { dmThreads: {} }).catch(function () {});
+                } else if (String(threadKey || '').trim()) {
+                    var tk = String(threadKey);
+                    TFclr.runTransaction(TFclr.db, function (transaction) {
+                        return transaction.get(TFclr.bundleRef).then(function (snap) {
+                            if (!snap.exists) return;
+                            var data = snap.data();
+                            var dm =
+                                data.dmThreads && typeof data.dmThreads === 'object'
+                                    ? JSON.parse(JSON.stringify(data.dmThreads))
+                                    : {};
+                            delete dm[tk];
+                            transaction.update(TFclr.bundleRef, { dmThreads: dm });
+                        });
+                    }).catch(function () {});
+                }
+                return;
+            }
             var base = getLiveSyncBase();
             var body = all ? '{}' : JSON.stringify({ threadKey: String(threadKey || '') });
             if (!all && !String(threadKey || '').trim()) return;
@@ -3663,7 +4208,21 @@
         }
 
         function liveSyncPullOnce() {
-            if (!liveSyncEnabled()) return;
+            var TFpl = tf();
+            if (firebaseSyncActive() && TFpl) {
+                TFpl.getDoc(TFpl.bundleRef).then(function (snap) {
+                    if (!snap.exists) return;
+                    var data = snap.data();
+                    if (!data) return;
+                    liveSyncApplyBundle(data);
+                    if (!liveSyncConnectedOnce) {
+                        liveSyncConnectedOnce = true;
+                        showToast('Firebase（Firestore）とつながりました');
+                    }
+                }).catch(function () {});
+                return;
+            }
+            if (!getLiveSyncBase()) return;
             var base = getLiveSyncBase();
             fetch(base + '/api/bundle')
                 .then(function (r) { return r.ok ? r.json() : null; })
@@ -3877,21 +4436,16 @@
         }
 
         function getDismissedNotifIdMap() {
-            try {
-                var raw = localStorage.getItem('tealfolder.dismissedNotifs.v1');
-                if (!raw) return {};
-                var o = JSON.parse(raw);
-                if (!o || typeof o !== 'object') return {};
-                return o;
-            } catch (_) {
-                return {};
-            }
+            return state.dismissedNotifsRemote && typeof state.dismissedNotifsRemote === 'object'
+                ? state.dismissedNotifsRemote
+                : {};
         }
 
         function persistDismissedNotifIdMap(map) {
-            try {
-                localStorage.setItem('tealfolder.dismissedNotifs.v1', JSON.stringify(map || {}));
-            } catch (_) {}
+            state.dismissedNotifsRemote = map || {};
+            if (tf()) {
+                flushUserDefaultDoc();
+            }
         }
 
         function isNotificationDismissedFromList(id) {
@@ -4264,8 +4818,8 @@
             var orgIcon = document.getElementById('detailOrganizerIcon');
             if (orgIcon) {
                 var pub = publicProfileForUidOrName(d.hostedByUserId || '', d.chatWith || '');
-                var syncedPhoto = pub && typeof pub.photoDataUrl === 'string' ? pub.photoDataUrl : '';
-                if (syncedPhoto && syncedPhoto.indexOf('data:image/') === 0) {
+                var syncedPhoto = publicProfilePhotoUrl(pub);
+                if (syncedPhoto) {
                     orgIcon.classList.add('detail-organizer-ic--photo');
                     orgIcon.style.backgroundImage = 'url(' + JSON.stringify(syncedPhoto) + ')';
                     orgIcon.innerHTML = '';
@@ -4408,8 +4962,8 @@
                 var last = t.messages[t.messages.length - 1];
                 var preview = last ? last.text : '…';
                 var peerPub = publicProfileForUidOrName(t.peerUserId || '', t.with || '');
-                var peerPhoto = peerPub && typeof peerPub.photoDataUrl === 'string' ? peerPub.photoDataUrl : '';
-                var avatarInner = (peerPhoto && peerPhoto.indexOf('data:image/') === 0)
+                var peerPhoto = publicProfilePhotoUrl(peerPub);
+                var avatarInner = peerPhoto
                     ? ('<img class="dm-avatar-img" src="' + dmEsc(peerPhoto) + '" alt="">')
                     : dmEsc(t.avatar);
                 card.innerHTML =
@@ -4525,9 +5079,9 @@
             renderAccountMyOpenings();
             var phoneBlk = document.getElementById('accountPhoneAuthBlock');
             if (phoneBlk) {
-                phoneBlk.hidden = !PHONE_LOGIN_ACCOUNT_UI_ENABLED || !liveSyncEnabled();
+                phoneBlk.hidden = !PHONE_LOGIN_ACCOUNT_UI_ENABLED || !getLiveSyncBase();
                 var pst = document.getElementById('accountPhoneAuthStatus');
-                if (pst && liveSyncEnabled() && PHONE_LOGIN_ACCOUNT_UI_ENABLED) {
+                if (pst && getLiveSyncBase() && PHONE_LOGIN_ACCOUNT_UI_ENABLED) {
                     if (getMyUserId()) {
                         pst.textContent = state.auth.phoneE164
                             ? ('ログイン中（' + state.auth.phoneE164 + '）')
@@ -4669,8 +5223,8 @@
             var pub = publicProfileForUidOrName(uid, name);
             var avatarEl = document.getElementById('organizerAvatar');
             if (avatarEl) {
-                var syncedPhoto = pub && typeof pub.photoDataUrl === 'string' ? pub.photoDataUrl : '';
-                if (syncedPhoto && syncedPhoto.indexOf('data:image/') === 0) {
+                var syncedPhoto = publicProfilePhotoUrl(pub);
+                if (syncedPhoto) {
                     avatarEl.textContent = '';
                     avatarEl.style.backgroundImage = 'url(' + JSON.stringify(syncedPhoto) + ')';
                     avatarEl.classList.add('account-avatar--photo');
@@ -4883,10 +5437,41 @@
             showToast('参加申請しました。募集者に参加申請通知が届きます。');
         }
 
-        (function () {
-            loadPersistedProfile();
+        (function teertabAppBoot() {
+            if (!tf()) {
+                if (!window.__teertabTfSpin) window.__teertabTfSpin = 0;
+                window.__teertabTfSpin += 1;
+                if (window.__teertabTfSpin < 400) {
+                    setTimeout(teertabAppBoot, 25);
+                    return;
+                }
+                console.warn('Teertab: Firebase が読み込めませんでした（HTTPS で開き import map を確認してください）');
+                teertabRunMainAfterUserDefaultHydrate();
+                return;
+            }
+            initTeertabFirebase();
+            var TB = tf();
+            migrateLegacyLocalStorageToFirestoreOnce()
+                .then(function () {
+                    return TB.getDoc(TB.userDefaultRef);
+                })
+                .then(function (snap) {
+                    if (snap.exists) applyUserDefaultDocToState(snap.data());
+                    else {
+                        state.userDefaultHydrated = true;
+                        state.userDefaultHostedVols = [];
+                    }
+                    attachUserDefaultFirestoreListener();
+                    teertabRunMainAfterUserDefaultHydrate();
+                })
+                .catch(function () {
+                    attachUserDefaultFirestoreListener();
+                    teertabRunMainAfterUserDefaultHydrate();
+                });
+        })();
+
+        function teertabRunMainAfterUserDefaultHydrate() {
             applyProfileToAccountDom();
-            var USER_VOLS_STORAGE_KEY = 'tealfolder.userVols.v1';
             var deviceOwnerKey = getDeviceOwnerKey();
             ensureAuthSession(function () {
             function getCurrentUserProfile() {
@@ -4911,26 +5496,21 @@
                 return '#' + s.replace(/\s+/g, '');
             }
             function loadUserVols() {
-                try {
-                    var raw = localStorage.getItem(USER_VOLS_STORAGE_KEY);
-                    if (!raw) return [];
-                    var parsed = JSON.parse(raw);
-                    if (!Array.isArray(parsed)) return [];
-                    return parsed.filter(function (v) {
-                        return v && typeof v.id === 'string' && v.id.indexOf('vol-user-') === 0;
-                    });
-                } catch (_) {
-                    return [];
-                }
+                if (!Array.isArray(state.userDefaultHostedVols)) return [];
+                return state.userDefaultHostedVols.filter(function (v) {
+                    return v && typeof v.id === 'string' && v.id.indexOf('vol-user-') === 0;
+                });
             }
             function saveUserVols(list) {
-                try {
-                    localStorage.setItem(USER_VOLS_STORAGE_KEY, JSON.stringify(list || []));
+                var clean = (list || []).filter(function (v) {
+                    return v && typeof v.id === 'string' && v.id.indexOf('vol-user-') === 0;
+                });
+                state.userDefaultHostedVols = clean;
+                if (tf()) {
+                    flushUserDefaultDoc();
                     return true;
-                } catch (_) {
-                    // ignore quota/private-mode failures in demo
-                    return false;
                 }
+                return false;
             }
             (function migrateLocalUserVolsStorage() {
                 try {
@@ -4938,10 +5518,8 @@
                     try {
                         scrub = new URLSearchParams(window.location.search).get('scrubLocalVols') === '1';
                     } catch (_) {}
-                    var raw = localStorage.getItem(USER_VOLS_STORAGE_KEY);
-                    if (!raw) return;
-                    var parsed = JSON.parse(raw);
-                    if (!Array.isArray(parsed)) return;
+                    var parsed = state.userDefaultHostedVols;
+                    if (!Array.isArray(parsed) || !parsed.length) return;
                     var next = parsed.filter(shouldKeepVolInLocalCache);
                     if (next.length !== parsed.length) {
                         saveUserVols(next);
@@ -4989,7 +5567,7 @@
                     var uidByName = userIdForDisplayName(v.chatWith);
                     if (uidByName) photo = syncedPhotoForUserId(uidByName);
                 }
-                if (photo && photo.indexOf('data:image/') === 0) {
+                if (photo && (photo.indexOf('data:image/') === 0 || photo.indexOf('https://') === 0 || photo.indexOf('http://') === 0)) {
                     return '<img class="req-icon-photo" src="' + escapeHtml(photo) + '" alt="">';
                 }
                 return '<span aria-hidden="true">' + escapeHtml(v.thumb || '🤝') + '</span>';
@@ -5575,38 +6153,42 @@
             updateNotifBadge();
 
             if (liveSyncEnabled()) {
-                var doPurge = false;
-                try {
-                    doPurge = new URLSearchParams(window.location.search).get('purgeServerVols') === '1';
-                } catch (_) {}
-                if (doPurge) {
-                    var pb = getLiveSyncBase();
-                    fetch(pb + '/api/dev/clear-user-vols', { method: 'POST' })
-                        .then(function (r) { return r.json().catch(function () { return null; }); })
-                        .then(function (j) {
-                            try {
-                                var u = new URL(window.location.href);
-                                u.searchParams.delete('purgeServerVols');
-                                window.history.replaceState({}, '', u.pathname + u.search + u.hash);
-                            } catch (_) {}
-                            if (j && j.ok) {
-                                showToast('サーバー上のユーザ募集を' + String(j.removed || 0) + '件削除しました');
-                            } else {
-                                showToast('サーバーから募集を消せませんでした（127.0.0.1 で同期サーバーを開いているか確認）');
-                            }
-                            liveSyncPullOnce();
-                        })
-                        .catch(function () {
-                            showToast('同期サーバーに接続できませんでした');
-                        });
-                    window.setInterval(liveSyncPullOnce, 2800);
+                if (firebaseSyncActive()) {
+                    attachFirebaseBundleListener();
                 } else {
-                    window.setTimeout(liveSyncPullOnce, 300);
-                    window.setInterval(liveSyncPullOnce, 2800);
+                    var doPurge = false;
+                    try {
+                        doPurge = new URLSearchParams(window.location.search).get('purgeServerVols') === '1';
+                    } catch (_) {}
+                    if (doPurge) {
+                        var pb = getLiveSyncBase();
+                        fetch(pb + '/api/dev/clear-user-vols', { method: 'POST' })
+                            .then(function (r) { return r.json().catch(function () { return null; }); })
+                            .then(function (j) {
+                                try {
+                                    var u = new URL(window.location.href);
+                                    u.searchParams.delete('purgeServerVols');
+                                    window.history.replaceState({}, '', u.pathname + u.search + u.hash);
+                                } catch (_) {}
+                                if (j && j.ok) {
+                                    showToast('サーバー上のユーザ募集を' + String(j.removed || 0) + '件削除しました');
+                                } else {
+                                    showToast('サーバーから募集を消せませんでした（127.0.0.1 で同期サーバーを開いているか確認）');
+                                }
+                                liveSyncPullOnce();
+                            })
+                            .catch(function () {
+                                showToast('同期サーバーに接続できませんでした');
+                            });
+                        window.setInterval(liveSyncPullOnce, 2800);
+                    } else {
+                        window.setTimeout(liveSyncPullOnce, 300);
+                        window.setInterval(liveSyncPullOnce, 2800);
+                    }
                 }
             }
             });
-        })();
+        }
 </script>
 </body>
 </html>
