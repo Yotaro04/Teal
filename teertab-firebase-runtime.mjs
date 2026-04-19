@@ -16,7 +16,14 @@ import {
     deleteField
 } from 'firebase/firestore';
 import { ref, uploadString, getDownloadURL } from 'firebase/storage';
-import { GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signOut } from 'firebase/auth';
+import {
+    GoogleAuthProvider,
+    onAuthStateChanged,
+    signInWithPopup,
+    signInWithEmailAndPassword,
+    createUserWithEmailAndPassword,
+    signOut
+} from 'firebase/auth';
 
 const bundleRef = doc(db, 'teertabSync', 'bundle');
 
@@ -46,6 +53,8 @@ window.__TF = {
     GoogleAuthProvider,
     onAuthStateChanged,
     signInWithPopup,
+    signInWithEmailAndPassword,
+    createUserWithEmailAndPassword,
     signOut,
     ready: true
 };

@@ -2191,14 +2191,57 @@
             color: var(--text-sub);
             font-size: 0.86rem;
         }
+        .auth-divider {
+            margin: 18px 0 14px;
+            font-size: 0.82rem;
+            font-weight: 800;
+            color: var(--text-sub);
+            letter-spacing: 0.06em;
+        }
+        .auth-form {
+            text-align: left;
+            margin-top: 4px;
+        }
+        .auth-form .profile-edit-label {
+            display: block;
+            margin-top: 10px;
+            margin-bottom: 4px;
+            font-size: 0.78rem;
+            font-weight: 800;
+            color: var(--text-sub);
+        }
+        .auth-form .profile-edit-input {
+            width: 100%;
+            box-sizing: border-box;
+        }
+        .auth-form-actions {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            margin-top: 14px;
+        }
+        .auth-form-actions .btn {
+            width: 100%;
+        }
     </style>
 </head>
 <body>
 <div id="authGate" class="auth-gate">
     <div class="auth-card">
         <h1>Teertab にログイン</h1>
-        <p>Google アカウントでログインすると、同じアカウントの端末同士でデータが同期されます。</p>
+        <p>Google またはメールアドレスでログインすると、同じアカウントの端末同士でデータが同期されます。</p>
         <button type="button" class="btn btn-primary" id="googleLoginBtn">Googleでログイン</button>
+        <div class="auth-divider" aria-hidden="true">または</div>
+        <div class="auth-form" role="group" aria-label="メールでログイン">
+            <label class="profile-edit-label" for="authEmailLogin">メールアドレス</label>
+            <input type="email" id="authEmailLogin" class="profile-edit-input" autocomplete="username" inputmode="email" placeholder="you@example.com">
+            <label class="profile-edit-label" for="authPasswordLogin">パスワード</label>
+            <input type="password" id="authPasswordLogin" class="profile-edit-input" autocomplete="current-password" placeholder="パスワード">
+            <div class="auth-form-actions">
+                <button type="button" class="btn btn-secondary" id="authEmailTestLoginBtn">テストユーザーでログイン</button>
+                <button type="button" class="btn" id="authEmailSignupBtn">メールで新規登録</button>
+            </div>
+        </div>
         <div class="auth-status" id="authGateStatus"></div>
     </div>
 </div>
@@ -5845,6 +5888,37 @@
             return TF.signInWithPopup(TF.auth, provider);
         }
 
+        function formatFirebaseAuthError(err) {
+            var code = err && err.code ? String(err.code) : '';
+            if (code === 'auth/invalid-email') return 'メールアドレスの形式が正しくありません';
+            if (code === 'auth/user-disabled') return 'このアカウントは無効化されています';
+            if (code === 'auth/user-not-found') return 'ユーザーが見つかりません。新規登録するか、メールアドレスを確認してください';
+            if (code === 'auth/wrong-password') return 'パスワードが正しくありません';
+            if (code === 'auth/invalid-credential') return 'メールアドレスまたはパスワードが正しくありません';
+            if (code === 'auth/invalid-login-credentials') return 'メールアドレスまたはパスワードが正しくありません';
+            if (code === 'auth/email-already-in-use') return 'このメールアドレスは既に登録されています';
+            if (code === 'auth/weak-password') return 'パスワードが弱すぎます（6文字以上を推奨）';
+            if (code === 'auth/network-request-failed') return 'ネットワークエラーです。接続を確認してください';
+            var msg = (err && err.message) ? String(err.message) : '';
+            return msg || '認証に失敗しました';
+        }
+
+        function signInWithEmailPassword(email, password) {
+            var TF = tf();
+            if (!TF || !TF.auth || !TF.signInWithEmailAndPassword) {
+                return Promise.reject(new Error('auth not ready'));
+            }
+            return TF.signInWithEmailAndPassword(TF.auth, String(email || '').trim(), String(password || ''));
+        }
+
+        function createUserWithEmailPassword(email, password) {
+            var TF = tf();
+            if (!TF || !TF.auth || !TF.createUserWithEmailAndPassword) {
+                return Promise.reject(new Error('auth not ready'));
+            }
+            return TF.createUserWithEmailAndPassword(TF.auth, String(email || '').trim(), String(password || ''));
+        }
+
         function openAccountSettingsModal() {
             var modal = document.getElementById('accountSettingsModal');
             if (modal) modal.classList.add('open');
@@ -5917,6 +5991,42 @@
                     signInWithGoogle().catch(function (err) {
                         var msg = (err && err.message) ? String(err.message) : '';
                         setAuthGateVisible(true, msg ? ('ログインに失敗しました: ' + msg) : 'ログインに失敗しました');
+                    });
+                });
+            }
+            var emailLoginBtn = document.getElementById('authEmailTestLoginBtn');
+            var emailSignupBtn = document.getElementById('authEmailSignupBtn');
+            function readAuthEmailPasswordInputs() {
+                var emEl = document.getElementById('authEmailLogin');
+                var pwEl = document.getElementById('authPasswordLogin');
+                return {
+                    email: emEl ? String(emEl.value || '').trim() : '',
+                    password: pwEl ? String(pwEl.value || '') : ''
+                };
+            }
+            if (emailLoginBtn) {
+                emailLoginBtn.addEventListener('click', function () {
+                    var v = readAuthEmailPasswordInputs();
+                    if (!v.email || !v.password) {
+                        setAuthGateVisible(true, 'メールアドレスとパスワードを入力してください');
+                        return;
+                    }
+                    setAuthGateVisible(true, 'ログインしています...');
+                    signInWithEmailPassword(v.email, v.password).catch(function (err) {
+                        setAuthGateVisible(true, 'ログインに失敗しました: ' + formatFirebaseAuthError(err));
+                    });
+                });
+            }
+            if (emailSignupBtn) {
+                emailSignupBtn.addEventListener('click', function () {
+                    var v = readAuthEmailPasswordInputs();
+                    if (!v.email || !v.password) {
+                        setAuthGateVisible(true, 'メールアドレスとパスワードを入力してください');
+                        return;
+                    }
+                    setAuthGateVisible(true, 'アカウントを作成しています...');
+                    createUserWithEmailPassword(v.email, v.password).catch(function (err) {
+                        setAuthGateVisible(true, '登録に失敗しました: ' + formatFirebaseAuthError(err));
                     });
                 });
             }
