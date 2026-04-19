@@ -1,29 +1,53 @@
-// 既存の match /databases/{database}/documents { ... } の「内側」に貼り付けてください。
-// applications / notifications / chats（サブコレクション messages）用
+// この断片を match /databases/{database}/documents { ... } の内側にマージするか、
+// 下部の「丸ごとコピー用」と既存の posts / users ルールを統合してデプロイしてください。
 
+    // --- applications（クライアントが setDoc する内容と完全一致: 4 フィールドのみ）---
+    // postId, applicantId, ownerId はすべて string。status は 'pending' のみ create 可。
     match /applications/{appId} {
       allow read: if request.auth != null
         && (resource.data.applicantId == request.auth.uid
             || resource.data.ownerId == request.auth.uid);
       allow create: if request.auth != null
+        && request.resource.data.keys().hasOnly(['postId', 'applicantId', 'ownerId', 'status'])
         && request.resource.data.applicantId == request.auth.uid
+        && request.resource.data.applicantId is string
         && request.resource.data.ownerId is string
+        && request.resource.data.ownerId != request.resource.data.applicantId
+        && request.resource.data.postId is string
+        && request.resource.data.postId.size() > 0
         && request.resource.data.status == 'pending';
       allow update: if request.auth != null
         && resource.data.ownerId == request.auth.uid
         && resource.data.status == 'pending'
-        && request.resource.data.status == 'approved';
+        && request.resource.data.status == 'approved'
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'approvedAt']);
     }
 
+    // --- notifications（submitJoinApplicationFirestore の notifPayload と一致）---
     match /notifications/{nid} {
       allow read: if request.auth != null
         && resource.data.recipientId == request.auth.uid;
       allow create: if request.auth != null
         && request.resource.data.applicantId == request.auth.uid
-        && request.resource.data.recipientId is string;
+        && request.resource.data.keys().hasOnly([
+          'recipientId', 'ownerId', 'applicantId', 'applicationId', 'type', 'joinStatus',
+          'volTitle', 'volId', 'postId', 'organizerUserId', 'applicantUserId',
+          'organizerName', 'applicantName', 'createdAt'
+        ])
+        && request.resource.data.recipientId is string
+        && request.resource.data.ownerId is string
+        && request.resource.data.applicantId is string
+        && request.resource.data.applicationId is string
+        && request.resource.data.type == 'join_request'
+        && request.resource.data.joinStatus == 'pending'
+        && request.resource.data.postId is string
+        && request.resource.data.volId is string
+        && request.resource.data.organizerUserId is string
+        && request.resource.data.applicantUserId is string;
       allow update: if request.auth != null
         && (resource.data.recipientId == request.auth.uid
-            || resource.data.ownerId == request.auth.uid);
+            || resource.data.ownerId == request.auth.uid)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['joinStatus']);
       allow delete: if request.auth != null
         && resource.data.recipientId == request.auth.uid;
     }
@@ -32,7 +56,10 @@
       allow read: if request.auth != null
         && request.auth.uid in resource.data.participantIds;
       allow create: if request.auth != null
-        && request.auth.uid in request.resource.data.participantIds;
+        && request.auth.uid in request.resource.data.participantIds
+        && request.resource.data.keys().hasOnly([
+          'applicationId', 'postId', 'ownerId', 'applicantId', 'participantIds', 'createdAt'
+        ]);
       allow update: if request.auth != null
         && request.auth.uid in resource.data.participantIds;
 
@@ -40,6 +67,9 @@
         allow read: if request.auth != null
           && request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participantIds;
         allow create: if request.auth != null
-          && request.auth.uid == request.resource.data.senderId;
+          && request.resource.data.keys().hasOnly(['senderId', 'senderName', 'device', 'text', 'createdAt'])
+          && request.resource.data.senderId == request.auth.uid
+          && request.resource.data.senderId is string
+          && request.resource.data.text is string;
       }
     }

@@ -4422,9 +4422,19 @@
         function submitJoinApplicationFirestore(vol, done) {
             if (typeof done !== 'function') done = function () {};
             var TF = tf();
-            var applicantId = getMyUserId();
-            var ownerId = vol && vol.hostedByUserId ? String(vol.hostedByUserId) : '';
-            if (!TF || !applicantId || !ownerId || ownerId === applicantId) {
+            var applicantId = String(getMyUserId() || '').trim();
+            var rawOwner = vol && (vol.hostedByUserId || vol.authorId);
+            var ownerId = rawOwner ? String(rawOwner).trim() : '';
+            var postId = vol && vol.id ? String(vol.id).trim() : '';
+            if (!TF || !applicantId || !ownerId || ownerId === applicantId || !postId) {
+                if (!postId || !ownerId) {
+                    console.error('[Teertab] submitJoinApplicationFirestore: missing postId or ownerId', {
+                        postId: postId,
+                        ownerId: ownerId,
+                        hostedByUserId: vol && vol.hostedByUserId,
+                        authorId: vol && vol.authorId
+                    });
+                }
                 done(false);
                 return;
             }
@@ -4437,29 +4447,24 @@
             var ownerNotifRef = TF.notificationDocRef(appId + '__owner');
             var applicantNotifRef = TF.notificationDocRef(appId + '__applicant');
             var commonTs = TF.serverTimestamp();
-            var batch = TF.writeBatch(TF.db);
-            batch.set(appRef, {
-                postId: vol.id,
+            /** ルールと完全一致: applications はこの4キーのみ（型は string / literal） */
+            var applicationPayload = {
+                postId: postId,
                 applicantId: applicantId,
                 ownerId: ownerId,
-                status: 'pending',
-                volId: vol.id,
-                volTitle: volTitle,
-                organizerName: organizerName,
-                applicantName: applicant,
-                createdAt: commonTs
-            });
+                status: 'pending'
+            };
             function notifPayload(recipientId) {
                 return {
-                    recipientId: recipientId,
+                    recipientId: String(recipientId),
                     ownerId: ownerId,
                     applicantId: applicantId,
                     applicationId: appId,
                     type: 'join_request',
                     joinStatus: 'pending',
                     volTitle: volTitle,
-                    volId: vol.id,
-                    postId: vol.id,
+                    volId: postId,
+                    postId: postId,
                     organizerUserId: ownerId,
                     applicantUserId: applicantId,
                     organizerName: organizerName,
@@ -4467,16 +4472,21 @@
                     createdAt: commonTs
                 };
             }
-            batch.set(ownerNotifRef, notifPayload(ownerId));
-            batch.set(applicantNotifRef, notifPayload(applicantId));
-            batch
-                .commit()
+            TF.setDoc(appRef, applicationPayload)
+                .then(function () {
+                    var batch = TF.writeBatch(TF.db);
+                    batch.set(ownerNotifRef, notifPayload(ownerId));
+                    batch.set(applicantNotifRef, notifPayload(applicantId));
+                    return batch.commit();
+                })
                 .then(function () {
                     done(true);
                 })
                 .catch(function (err) {
-                    console.warn('Teertab submitJoinApplicationFirestore', err);
-                    done(false);
+                    var code = err && err.code ? String(err.code) : '';
+                    var msg = err && err.message ? String(err.message) : String(err);
+                    console.error('[Teertab] submitJoinApplicationFirestore FAILED', code, msg, err);
+                    done(false, code || msg);
                 });
         }
 
@@ -4511,8 +4521,7 @@
                         TF.chatDocRef(applicationId),
                         {
                             applicationId: applicationId,
-                            postId: String(app.postId || app.volId || ''),
-                            volId: String(app.volId || app.postId || ''),
+                            postId: String(app.postId || ''),
                             ownerId: app.ownerId,
                             applicantId: app.applicantId,
                             participantIds: participantIds,
@@ -4528,7 +4537,9 @@
                     onSuccess();
                 })
                 .catch(function (err) {
-                    console.warn('Teertab approveJoinApplicationFirestore', err);
+                    var code = err && err.code ? String(err.code) : '';
+                    var msg = err && err.message ? String(err.message) : String(err);
+                    console.error('[Teertab] approveJoinApplicationFirestore FAILED', code, msg, err);
                     onErr();
                 });
         }
@@ -6303,11 +6314,12 @@
             var orgUid = v.hostedByUserId || '';
             var volTitle = v.title || '';
             if (useFirestoreJoinFlow()) {
-                if (!orgUid) {
+                var ownerUidForJoin = String(v.hostedByUserId || v.authorId || '').trim();
+                if (!ownerUidForJoin) {
                     showToast('募集者のユーザー情報がないため、参加申請を同期できません');
                     return;
                 }
-                submitJoinApplicationFirestore(v, function (ok) {
+                submitJoinApplicationFirestore(v, function (ok, errDetail) {
                     if (ok) {
                         state.history.unshift({ title: v.title, meta: '2026年4月 · ' + v.place + ' · 参加申請' });
                         renderAccount();
@@ -6316,7 +6328,8 @@
                         updateHomeJoinRequestBanner();
                         showToast('参加申請しました。募集者に参加申請通知が届きます。');
                     } else {
-                        showToast('参加申請の保存に失敗しました（Firestore の権限・ネットワークを確認してください）');
+                        var hint = errDetail ? ('（' + errDetail + '）') : '';
+                        showToast('参加申請の保存に失敗しました' + hint + '。コンソール（F12）の詳細を確認してください。');
                     }
                 });
                 return;
