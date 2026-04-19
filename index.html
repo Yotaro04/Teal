@@ -1369,6 +1369,21 @@
         .nav-icon { font-size: 1.45rem; line-height: 1; display: block; }
 
         /* Search / Detail / DM UI */
+        .home-join-request-banner {
+            margin: 0 12px 10px;
+            padding: 10px 14px;
+            border-radius: 14px;
+            background: rgba(66, 230, 210, 0.12);
+            border: 1px solid rgba(66, 230, 210, 0.35);
+            color: var(--text-main);
+            font-size: 0.88rem;
+            font-weight: 800;
+            text-align: center;
+            line-height: 1.35;
+        }
+        .home-join-request-banner[hidden] {
+            display: none !important;
+        }
         .list {
             display: flex;
             flex-direction: column;
@@ -2358,6 +2373,7 @@
         </form>
     </div>
     <div id="home" class="content-section active">
+        <div id="homeJoinRequestBanner" class="home-join-request-banner" hidden role="status"></div>
         <div class="home-cards" id="homeCards">
             <div class="home-empty-hint" id="homeEmptyHint">まだ募集がありません。右下の「募集する」から投稿すると、ここに表示されます。</div>
         </div>
@@ -2587,6 +2603,11 @@
         var teertabUserDefaultListenerAttached = false;
         var teertabUserDocUnsub = null;
         var teertabUserCardsUnsub = null;
+        var teertabFsNotificationsUnsub = null;
+        var teertabFsApplicationsOwnerUnsub = null;
+        var teertabFsApplicationsApplicantUnsub = null;
+        var teertabFsChatsUnsub = null;
+        var teertabFsChatMessagesUnsub = null;
         var userDefaultSaveTimer = null;
         var currentUserDocRef = null;
         var accountViewRefreshSeq = 0;
@@ -2765,6 +2786,9 @@
             threads: [],
             history: [],
             notifications: [],
+            _bundleNotificationsRaw: [],
+            _fsNotificationRows: [],
+            _fsPendingOwnerApplicationCount: 0,
             userDefaultHydrated: false,
             userDefaultHostedVols: [],
             dismissedNotifsRemote: {}
@@ -2962,23 +2986,6 @@
             renderAccount();
             liveSyncReconcileHomeCards();
             updateHomeEmptyState();
-        }
-
-        function fetchPostsOnce() {
-            var TF = tf();
-            var col = getPostsColRef();
-            if (!TF || !col) return Promise.resolve();
-            return TF.getDocs(col)
-                .then(function (snap) {
-                    var cards = [];
-                    snap.forEach(function (d) {
-                        var card = d.data() || {};
-                        card.id = card.id || d.id;
-                        cards.push(card);
-                    });
-                    applyPostsToState(cards);
-                })
-                .catch(function () {});
         }
 
         function attachUserCardsFirestoreListener() {
@@ -4136,6 +4143,411 @@
             });
         }
 
+        function useFirestoreJoinFlow() {
+            var TF = tf();
+            return !!(
+                TF &&
+                getMyUserId() &&
+                !state.auth.secret &&
+                TF.notificationsColRef &&
+                TF.applicationsColRef &&
+                TF.chatsColRef &&
+                TF.writeBatch
+            );
+        }
+
+        function fsTimestampToMs(ts) {
+            if (!ts) return 0;
+            if (typeof ts.toMillis === 'function') return ts.toMillis();
+            if (typeof ts.seconds === 'number') return ts.seconds * 1000;
+            return 0;
+        }
+
+        function formatRelativeNotifShort(ms) {
+            if (!ms) return '今';
+            var diff = Date.now() - ms;
+            if (diff < 60000) return '今';
+            if (diff < 3600000) return Math.floor(diff / 60000) + '分前';
+            if (diff < 86400000) return Math.floor(diff / 3600000) + '時間前';
+            return Math.floor(diff / 86400000) + '日前';
+        }
+
+        function notificationSortKey(n) {
+            if (!n) return 0;
+            if (typeof n._sortAt === 'number') return n._sortAt;
+            return 0;
+        }
+
+        function fsNotificationDocToUi(docSnap) {
+            var data = docSnap.data() || {};
+            var ms = fsTimestampToMs(data.createdAt) || Date.now();
+            var joinSt = data.joinStatus != null ? String(data.joinStatus) : 'pending';
+            return {
+                id: docSnap.id,
+                applicationId: String(data.applicationId || '').trim(),
+                type: data.type || 'join_request',
+                joinStatus: joinSt,
+                at: formatRelativeNotifShort(ms),
+                _sortAt: ms,
+                organizerName: String(data.organizerName || '').trim(),
+                applicantName: String(data.applicantName || '').trim(),
+                organizerUserId: String(data.organizerUserId || data.ownerId || '').trim(),
+                applicantUserId: String(data.applicantUserId || '').trim(),
+                volTitle: String(data.volTitle || '').trim(),
+                volId: String(data.volId || data.postId || '').trim(),
+                _firestoreNotification: true
+            };
+        }
+
+        function mergeNotificationsIntoState() {
+            var bundle = Array.isArray(state._bundleNotificationsRaw) ? state._bundleNotificationsRaw.slice() : [];
+            if (useFirestoreJoinFlow()) {
+                bundle = bundle.filter(function (n) {
+                    return !n || n.type !== 'join_request';
+                });
+            }
+            var fsList = Array.isArray(state._fsNotificationRows) ? state._fsNotificationRows.slice() : [];
+            var merged = bundle.concat(fsList);
+            var map = {};
+            merged.forEach(function (n) {
+                if (n && n.id) map[n.id] = n;
+            });
+            state.notifications = Object.keys(map)
+                .map(function (k) {
+                    return map[k];
+                })
+                .sort(function (a, b) {
+                    return notificationSortKey(b) - notificationSortKey(a);
+                });
+            renderNotifications();
+            updateNotifBadge();
+            syncDetailActionBars();
+            updateHomeJoinRequestBanner();
+        }
+
+        function countPendingJoinRequestsForOrganizer() {
+            var uid = getMyUserId();
+            if (!uid) return 0;
+            return (state.notifications || []).filter(function (n) {
+                if (!n || n.type !== 'join_request') return false;
+                if (isNotificationDismissedFromList(n.id)) return false;
+                var st = n.joinStatus != null ? n.joinStatus : 'pending';
+                if (st !== 'pending') return false;
+                if (n.organizerUserId && uid) return n.organizerUserId === uid;
+                return notifIsOrganizer(n);
+            }).length;
+        }
+
+        function updateHomeJoinRequestBanner() {
+            var el = document.getElementById('homeJoinRequestBanner');
+            if (!el) return;
+            if (!useFirestoreJoinFlow()) {
+                el.hidden = true;
+                el.textContent = '';
+                return;
+            }
+            var fromApps = state._fsPendingOwnerApplicationCount || 0;
+            var fromNotifs = countPendingJoinRequestsForOrganizer();
+            var n = Math.max(fromApps, fromNotifs);
+            if (n <= 0) {
+                el.hidden = true;
+                el.textContent = '';
+                return;
+            }
+            el.hidden = false;
+            el.textContent = '申請が来ています（参加申請 ' + n + ' 件）。通知タブから承認できます。';
+        }
+
+        function detachFirestoreChatMessagesListener() {
+            if (typeof teertabFsChatMessagesUnsub === 'function') teertabFsChatMessagesUnsub();
+            teertabFsChatMessagesUnsub = null;
+        }
+
+        function detachFirestoreJoinFlowListeners() {
+            if (typeof teertabFsNotificationsUnsub === 'function') teertabFsNotificationsUnsub();
+            teertabFsNotificationsUnsub = null;
+            if (typeof teertabFsApplicationsOwnerUnsub === 'function') teertabFsApplicationsOwnerUnsub();
+            teertabFsApplicationsOwnerUnsub = null;
+            if (typeof teertabFsApplicationsApplicantUnsub === 'function') teertabFsApplicationsApplicantUnsub();
+            teertabFsApplicationsApplicantUnsub = null;
+            if (typeof teertabFsChatsUnsub === 'function') teertabFsChatsUnsub();
+            teertabFsChatsUnsub = null;
+            detachFirestoreChatMessagesListener();
+            state._fsNotificationRows = [];
+            state._fsPendingOwnerApplicationCount = 0;
+        }
+
+        function rebuildFsNotificationsFromQuerySnapshot(snap) {
+            var rows = [];
+            snap.forEach(function (d) {
+                rows.push(fsNotificationDocToUi(d));
+            });
+            state._fsNotificationRows = rows;
+            mergeNotificationsIntoState();
+        }
+
+        function findThreadByFirestoreChatId(cid) {
+            if (!cid) return null;
+            return (
+                (state.threads || []).find(function (t) {
+                    return t && t.firestoreChatId === cid;
+                }) || null
+            );
+        }
+
+        function attachFirestoreChatMessagesListener(chatId) {
+            var TF = tf();
+            if (!TF || !chatId || !TF.chatMessagesColRef || !TF.orderBy) return;
+            detachFirestoreChatMessagesListener();
+            var col = TF.chatMessagesColRef(chatId);
+            var mq = TF.query(col, TF.orderBy('createdAt', 'asc'), TF.limit(200));
+            var myUid = getMyUserId() || '';
+            var myDev = getDeviceOwnerKey();
+            teertabFsChatMessagesUnsub = TF.onSnapshot(
+                mq,
+                function (snap) {
+                    var th = findThreadByFirestoreChatId(chatId);
+                    if (!th) return;
+                    th.messages = [];
+                    snap.forEach(function (d) {
+                        var row = d.data() || {};
+                        var fromUid = String(row.senderId || '');
+                        var isMe = fromUid && myUid ? fromUid === myUid : false;
+                        var ms = fsTimestampToMs(row.createdAt) || Date.now();
+                        insertDmSorted(th, {
+                            id: d.id,
+                            me: isMe,
+                            text: String(row.text || ''),
+                            fromUserId: fromUid,
+                            device: String(row.device || ''),
+                            name: String(row.senderName || ''),
+                            at: ms
+                        });
+                    });
+                    if (th.messages.length) th.lastAt = '今';
+                    if (
+                        document.getElementById('chat') &&
+                        document.getElementById('chat').classList.contains('active') &&
+                        threadMatchesOpenChat(th)
+                    ) {
+                        renderChat();
+                    }
+                    setUnreadFlag();
+                    renderDmThreads();
+                },
+                function (e) {
+                    console.warn('Teertab chat messages listener', e);
+                }
+            );
+        }
+
+        function attachFirestoreJoinFlowListeners() {
+            var TF = tf();
+            if (!TF || !useFirestoreJoinFlow()) return;
+            detachFirestoreJoinFlowListeners();
+            var uid = getMyUserId();
+            try {
+                var nq = TF.query(TF.notificationsColRef(), TF.where('recipientId', '==', uid), TF.limit(80));
+                teertabFsNotificationsUnsub = TF.onSnapshot(nq, rebuildFsNotificationsFromQuerySnapshot, function (e) {
+                    console.warn('Teertab notifications listener', e);
+                });
+            } catch (err) {
+                console.warn('Teertab notifications query', err);
+            }
+            try {
+                var qOwn = TF.query(TF.applicationsColRef(), TF.where('ownerId', '==', uid), TF.limit(60));
+                teertabFsApplicationsOwnerUnsub = TF.onSnapshot(
+                    qOwn,
+                    function (snap) {
+                        var c = 0;
+                        snap.forEach(function (d) {
+                            var x = d.data() || {};
+                            if (String(x.status || 'pending') === 'pending') c++;
+                        });
+                        state._fsPendingOwnerApplicationCount = c;
+                        updateHomeJoinRequestBanner();
+                    },
+                    function (e) {
+                        console.warn('Teertab applications owner listener', e);
+                    }
+                );
+            } catch (err2) {
+                console.warn('Teertab applications owner query', err2);
+            }
+            try {
+                var qApp = TF.query(TF.applicationsColRef(), TF.where('applicantId', '==', uid), TF.limit(60));
+                teertabFsApplicationsApplicantUnsub = TF.onSnapshot(
+                    qApp,
+                    function () {
+                        syncDetailActionBars();
+                    },
+                    function (e) {
+                        console.warn('Teertab applications applicant listener', e);
+                    }
+                );
+            } catch (err3) {
+                console.warn('Teertab applications applicant query', err3);
+            }
+            try {
+                var cq = TF.query(TF.chatsColRef(), TF.where('participantIds', 'array-contains', uid), TF.limit(40));
+                teertabFsChatsUnsub = TF.onSnapshot(
+                    cq,
+                    function (snap) {
+                        snap.forEach(function (d) {
+                            var data = d.data() || {};
+                            var ids = Array.isArray(data.participantIds) ? data.participantIds : [];
+                            var peerUid =
+                                ids.filter(function (x) {
+                                    return x && x !== uid;
+                                })[0] || '';
+                            var peerName = displayNameForUserId(peerUid) || 'DM';
+                            var th = ensureThread(peerName, peerUid);
+                            th.firestoreChatId = d.id;
+                            if (data.postId || data.volId) th.relatedVolId = String(data.postId || data.volId || '');
+                        });
+                        renderDmThreads();
+                        if (document.getElementById('chat') && document.getElementById('chat').classList.contains('active')) {
+                            renderChat();
+                        }
+                    },
+                    function (e) {
+                        console.warn('Teertab chats listener', e);
+                    }
+                );
+            } catch (err4) {
+                console.warn('Teertab chats query', err4);
+            }
+        }
+
+        function submitJoinApplicationFirestore(vol, done) {
+            if (typeof done !== 'function') done = function () {};
+            var TF = tf();
+            var applicantId = getMyUserId();
+            var ownerId = vol && vol.hostedByUserId ? String(vol.hostedByUserId) : '';
+            if (!TF || !applicantId || !ownerId || ownerId === applicantId) {
+                done(false);
+                return;
+            }
+            var appCol = TF.applicationsColRef();
+            var appRef = TF.doc(appCol);
+            var appId = appRef.id;
+            var organizerName = vol.chatWith || '募集者';
+            var applicant = state.profile.name || '参加者';
+            var volTitle = vol.title || '';
+            var ownerNotifRef = TF.notificationDocRef(appId + '__owner');
+            var applicantNotifRef = TF.notificationDocRef(appId + '__applicant');
+            var commonTs = TF.serverTimestamp();
+            var batch = TF.writeBatch(TF.db);
+            batch.set(appRef, {
+                postId: vol.id,
+                applicantId: applicantId,
+                ownerId: ownerId,
+                status: 'pending',
+                volId: vol.id,
+                volTitle: volTitle,
+                organizerName: organizerName,
+                applicantName: applicant,
+                createdAt: commonTs
+            });
+            function notifPayload(recipientId) {
+                return {
+                    recipientId: recipientId,
+                    ownerId: ownerId,
+                    applicantId: applicantId,
+                    applicationId: appId,
+                    type: 'join_request',
+                    joinStatus: 'pending',
+                    volTitle: volTitle,
+                    volId: vol.id,
+                    postId: vol.id,
+                    organizerUserId: ownerId,
+                    applicantUserId: applicantId,
+                    organizerName: organizerName,
+                    applicantName: applicant,
+                    createdAt: commonTs
+                };
+            }
+            batch.set(ownerNotifRef, notifPayload(ownerId));
+            batch.set(applicantNotifRef, notifPayload(applicantId));
+            batch
+                .commit()
+                .then(function () {
+                    done(true);
+                })
+                .catch(function (err) {
+                    console.warn('Teertab submitJoinApplicationFirestore', err);
+                    done(false);
+                });
+        }
+
+        function approveJoinApplicationFirestore(applicationId, onSuccess, onErr) {
+            if (typeof onSuccess !== 'function') onSuccess = function () {};
+            if (typeof onErr !== 'function') onErr = function () {};
+            var TF = tf();
+            if (!TF || !applicationId) {
+                onErr();
+                return;
+            }
+            TF.getDoc(TF.applicationDocRef(applicationId))
+                .then(function (snap) {
+                    if (!snap.exists) {
+                        onErr();
+                        return;
+                    }
+                    var app = snap.data() || {};
+                    if (String(app.ownerId || '') !== getMyUserId()) {
+                        showToast('権限がありません');
+                        onErr();
+                        return;
+                    }
+                    if (String(app.status || 'pending') !== 'pending') {
+                        onErr();
+                        return;
+                    }
+                    var batch = TF.writeBatch(TF.db);
+                    var participantIds = [String(app.ownerId || ''), String(app.applicantId || '')].filter(Boolean).sort();
+                    batch.update(TF.applicationDocRef(applicationId), { status: 'approved', approvedAt: TF.serverTimestamp() });
+                    batch.set(
+                        TF.chatDocRef(applicationId),
+                        {
+                            applicationId: applicationId,
+                            postId: String(app.postId || app.volId || ''),
+                            volId: String(app.volId || app.postId || ''),
+                            ownerId: app.ownerId,
+                            applicantId: app.applicantId,
+                            participantIds: participantIds,
+                            createdAt: TF.serverTimestamp()
+                        },
+                        { merge: true }
+                    );
+                    batch.update(TF.notificationDocRef(applicationId + '__owner'), { joinStatus: 'approved' });
+                    batch.update(TF.notificationDocRef(applicationId + '__applicant'), { joinStatus: 'approved' });
+                    return batch.commit();
+                })
+                .then(function () {
+                    onSuccess();
+                })
+                .catch(function (err) {
+                    console.warn('Teertab approveJoinApplicationFirestore', err);
+                    onErr();
+                });
+        }
+
+        function firestoreAppendChatMessage(chatId, text) {
+            var TF = tf();
+            var myUid = getMyUserId() || '';
+            if (!TF || !chatId || !TF.addDoc || !TF.chatMessagesColRef) return Promise.reject(new Error('bad message'));
+            var dev = getDeviceOwnerKey();
+            var nm = syncAccountNameFromDom();
+            var col = TF.chatMessagesColRef(chatId);
+            return TF.addDoc(col, {
+                senderId: myUid,
+                senderName: nm,
+                device: dev,
+                text: String(text || '').slice(0, 8000),
+                createdAt: TF.serverTimestamp()
+            });
+        }
 
         function updateHomeEmptyState() {
             var homeCards = document.getElementById('homeCards');
@@ -4193,18 +4605,16 @@
             Object.keys(sv).forEach(function (k) {
                 if (k.indexOf('vol-user-') === 0 && sv[k]) state.vols[k] = sv[k];
             });
-            state.notifications = (data.notifications || []).map(function (x) {
+            state._bundleNotificationsRaw = (data.notifications || []).map(function (x) {
                 return Object.assign({}, x);
             });
+            mergeNotificationsIntoState();
             var dmTouched = liveSyncMergeDmThreads(data.dmThreads || {});
             liveSyncRebuildMyHostedIds();
             if (typeof window.__tfSyncSaveUserVolsFromState === 'function') {
                 window.__tfSyncSaveUserVolsFromState();
             }
-            renderNotifications();
             renderSearchResults();
-            updateNotifBadge();
-            syncDetailActionBars();
             renderAccount();
             liveSyncReconcileHomeCards();
             if (dmTouched) {
@@ -4404,6 +4814,14 @@
         function appendOutgoingDm(peerName, text, peerUserId) {
             peerUserId = peerUserId || '';
             var th = ensureThread(peerName, peerUserId);
+            if (th.firestoreChatId && useFirestoreJoinFlow()) {
+                th.lastAt = '今';
+                th.unread = false;
+                firestoreAppendChatMessage(th.firestoreChatId, text).catch(function () {
+                    showToast('送信に失敗しました');
+                });
+                return;
+            }
             var id = newDmSyncId();
             var dev = getDeviceOwnerKey();
             var nm = syncAccountNameFromDom();
@@ -4453,6 +4871,7 @@
                 var incoming = bucket && bucket.messages;
                 if (!Array.isArray(incoming) || !incoming.length) return;
                 var th = ensureThread(peer, peerUserId);
+                if (th.firestoreChatId) return;
                 var have = {};
                 th.messages.forEach(function (m) {
                     if (m && m.id) have[m.id] = true;
@@ -4710,6 +5129,7 @@
             if (id === 'home') {
                 var homeNav = document.querySelector('.bottom-nav .nav-item[data-section="home"]');
                 if (homeNav) homeNav.classList.add('active');
+                updateHomeJoinRequestBanner();
             }
             if (id === 'account') {
                 var accountNav = document.querySelector('.bottom-nav .nav-item[data-section="account"]');
@@ -5055,6 +5475,29 @@
                             btnApprove.textContent = '承認';
                             btnApprove.addEventListener('click', function (e) {
                                 e.stopPropagation();
+                                if (n.applicationId && useFirestoreJoinFlow()) {
+                                    approveJoinApplicationFirestore(
+                                        n.applicationId,
+                                        function () {
+                                            var th2 = ensureThread(n.applicantName || '参加者', n.applicantUserId || '', 'applicant');
+                                            th2.firestoreChatId = n.applicationId;
+                                            updateNotifBadge();
+                                            renderNotifications();
+                                            syncDetailActionBars();
+                                            liveSyncReconcileHomeCards();
+                                            renderAccount();
+                                            if (document.getElementById('appShell') && document.getElementById('appShell').dataset.tab === 'organizer') {
+                                                renderOrganizerProfile();
+                                            }
+                                            updateHomeJoinRequestBanner();
+                                            showToast('承認しました。参加者に承認通知が届きます。');
+                                        },
+                                        function () {
+                                            showToast('承認の更新に失敗しました');
+                                        }
+                                    );
+                                    return;
+                                }
                                 n.joinStatus = 'approved';
                                 liveSyncPatchNotification(n.id, { joinStatus: 'approved' });
                                 updateNotifBadge();
@@ -5097,10 +5540,13 @@
                         btnDm.addEventListener('click', function (e) {
                             e.stopPropagation();
                             var dmPeer = isHost ? (n.applicantUserId || '') : (n.organizerUserId || '');
+                            var thDm = ensureThread(dmTarget, dmPeer, isHost ? 'applicant' : 'organizer');
+                            if (n.applicationId && useFirestoreJoinFlow()) {
+                                thDm.firestoreChatId = n.applicationId;
+                            }
                             appendOutgoingDm(dmTarget, isHost
                                 ? '参加申請を承認しました。詳細はこちらからご連絡します。'
                                 : '承認ありがとうございます。当日までに確認したいことがあればお送りします。', dmPeer);
-                            ensureThread(dmTarget, dmPeer, isHost ? 'applicant' : 'organizer');
                             setUnreadFlag();
                             renderDmThreads();
                             openChat(dmTarget, dmPeer);
@@ -5292,6 +5738,12 @@
             state.currentChatWith = withName || 'DM';
             state.currentChatPeerUserId = peerUserId || '';
             navigateTo('chat');
+            var th = findChatThread();
+            if (th && th.firestoreChatId && useFirestoreJoinFlow()) {
+                attachFirestoreChatMessagesListener(th.firestoreChatId);
+            } else {
+                detachFirestoreChatMessagesListener();
+            }
             renderChat();
             updateChatThanksButtonUI();
         }
@@ -5850,6 +6302,25 @@
             var organizerName = v.chatWith || '募集者';
             var orgUid = v.hostedByUserId || '';
             var volTitle = v.title || '';
+            if (useFirestoreJoinFlow()) {
+                if (!orgUid) {
+                    showToast('募集者のユーザー情報がないため、参加申請を同期できません');
+                    return;
+                }
+                submitJoinApplicationFirestore(v, function (ok) {
+                    if (ok) {
+                        state.history.unshift({ title: v.title, meta: '2026年4月 · ' + v.place + ' · 参加申請' });
+                        renderAccount();
+                        closeJoinModal();
+                        syncDetailActionBars();
+                        updateHomeJoinRequestBanner();
+                        showToast('参加申請しました。募集者に参加申請通知が届きます。');
+                    } else {
+                        showToast('参加申請の保存に失敗しました（Firestore の権限・ネットワークを確認してください）');
+                    }
+                });
+                return;
+            }
             state.history.unshift({ title: v.title, meta: '2026年4月 · ' + v.place + ' · 参加申請' });
             renderAccount();
             var th = ensureThread(organizerName, orgUid);
@@ -5960,11 +6431,12 @@
                         state.userDefaultHydrated = true;
                         state.userDefaultHostedVols = [];
                     }
-                    return fetchPostsOnce();
+                    return Promise.resolve();
                 })
                 .then(function () {
                     attachUserDefaultFirestoreListener();
                     attachUserCardsFirestoreListener();
+                    attachFirestoreJoinFlowListeners();
                     if (!teertabMainBooted) {
                         teertabMainBooted = true;
                         teertabRunMainAfterUserDefaultHydrate();
@@ -5973,6 +6445,7 @@
                 .catch(function () {
                     attachUserDefaultFirestoreListener();
                     attachUserCardsFirestoreListener();
+                    attachFirestoreJoinFlowListeners();
                     if (!teertabMainBooted) {
                         teertabMainBooted = true;
                         teertabRunMainAfterUserDefaultHydrate();
@@ -6050,6 +6523,7 @@
                     teertabUserDocUnsub = null;
                     if (typeof teertabUserCardsUnsub === 'function') teertabUserCardsUnsub();
                     teertabUserCardsUnsub = null;
+                    detachFirestoreJoinFlowListeners();
                     teertabUserDefaultListenerAttached = false;
                     setAuthGateVisible(true, '');
                     return;
@@ -6588,13 +7062,17 @@
                     saveUserVols(nextList);
                     liveSyncDeleteVolRemote(id);
                     liveSyncPruneNotificationsForVol(id);
-                    state.notifications = (state.notifications || []).filter(function (n) { return n.volId !== id; });
+                    state._bundleNotificationsRaw = (state._bundleNotificationsRaw || []).filter(function (n) {
+                        return !n || n.volId !== id;
+                    });
+                    state._fsNotificationRows = (state._fsNotificationRows || []).filter(function (n) {
+                        return !n || n.volId !== id;
+                    });
+                    mergeNotificationsIntoState();
                     var card = document.querySelector('[data-open-detail="' + id + '"]');
                     if (card && card.parentNode) card.parentNode.removeChild(card);
                     renderSearchResults();
                     renderAccount();
-                    updateNotifBadge();
-                    renderNotifications();
                     var homeNav = document.querySelector('.bottom-nav .nav-item[data-section="home"]');
                     showSection('home', homeNav);
                     showToast('募集を削除しました');

@@ -13,7 +13,13 @@ import {
     onSnapshot,
     runTransaction,
     serverTimestamp,
-    deleteField
+    deleteField,
+    query,
+    where,
+    orderBy,
+    limit,
+    addDoc,
+    writeBatch
 } from 'firebase/firestore';
 import { ref, uploadString, getDownloadURL } from 'firebase/storage';
 import {
@@ -42,11 +48,24 @@ window.__TF = {
     runTransaction,
     serverTimestamp,
     deleteField,
+    query,
+    where,
+    orderBy,
+    limit,
+    addDoc,
+    writeBatch,
     bundleRef,
     userDocRef: (uid) => doc(db, 'users', String(uid || '')),
     /** 全ユーザー共通の募集カード */
     postsColRef: () => collection(db, 'posts'),
     postDocRef: (postId) => doc(db, 'posts', String(postId || '')),
+    applicationsColRef: () => collection(db, 'applications'),
+    applicationDocRef: (applicationId) => doc(db, 'applications', String(applicationId || '')),
+    notificationsColRef: () => collection(db, 'notifications'),
+    notificationDocRef: (notificationId) => doc(db, 'notifications', String(notificationId || '')),
+    chatsColRef: () => collection(db, 'chats'),
+    chatDocRef: (chatId) => doc(db, 'chats', String(chatId || '')),
+    chatMessagesColRef: (chatId) => collection(db, 'chats', String(chatId || ''), 'messages'),
     storageRef: ref,
     uploadString,
     getDownloadURL,
