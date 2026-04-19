@@ -1349,6 +1349,28 @@
             user-select: none;
             position: relative;
         }
+        /** ボトム「アカウント」のアイコン領域（DM 未読ドットをヘッダ DM と同じロジックで重ねる） */
+        .nav-item-account-visual {
+            position: relative;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 1.5em;
+            min-height: 1.45rem;
+        }
+        .app-shell.has-unread .bottom-nav .nav-item[data-section="account"] .nav-item-account-visual::after {
+            content: "";
+            position: absolute;
+            top: -1px;
+            right: -3px;
+            width: 9px;
+            height: 9px;
+            border-radius: 999px;
+            background: var(--accent);
+            box-shadow: none;
+            pointer-events: none;
+            z-index: 2;
+        }
         .bottom-nav .nav-item.nav-item--pending-notif::after {
             content: "";
             position: absolute;
@@ -2590,7 +2612,7 @@
             <span class="nav-icon">🏠</span>ホーム
         </div>
         <div class="nav-item" data-section="account" onclick="showSection('account', this)">
-            <span class="nav-icon">👤</span>アカウント
+            <span class="nav-item-account-visual" aria-hidden="true"><span class="nav-icon">👤</span></span>アカウント
         </div>
     </nav>
 </div>
