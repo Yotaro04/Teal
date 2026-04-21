@@ -339,7 +339,8 @@
             var iconHtml = own
                 ? '<div class="req-icon" role="button" tabindex="0" data-open-account="1" aria-label="アカウント">' + iconInner + '</div>'
                 : '<div class="req-icon" role="button" tabindex="0" data-open-organizer="' + escapeHtml(v.chatWith || '主催者') + '"' +(v.hostedByUserId ? (' data-organizer-user-id="' + escapeHtml(v.hostedByUserId) + '"') : '') + ' aria-label="' + escapeHtml((v.chatWith || '主催者') + 'のプロフィール') + '">' + iconInner + '</div>';
-            card.innerHTML = '' +
+            card.innerHTML =
+                mediaHtml +
                 '<div class="home-card-body">' +
                     '<div class="req-card">' +
                         '<div class="req-card-top">' +
@@ -358,8 +359,7 @@
                                 (tags.length ? tags.map(function (t) { return '<span class="req-tag">' + escapeHtml(t) + '</span>'; }).join('') : '') +
                             '</div>' +
                     '</div>' +
-                '</div>' +
-                mediaHtml;
+                '</div>';
             card.addEventListener('click', function () {
                 openDetailFromCardElement(card);
             });

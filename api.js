@@ -222,11 +222,25 @@
         }
 
         function applyPostsToState(cards) {
+            var myUid = getMyUserId();
             var nextList = Array.isArray(cards) ? cards.filter(function (v) {
                 return v && typeof v.id === 'string' && v.id.indexOf('vol-user-') === 0;
             }) : [];
+            var idsFromServer = {};
+            nextList.forEach(function (raw) {
+                if (raw && raw.id) idsFromServer[raw.id] = true;
+            });
+            /** 自分の募集で、スナップショットにまだ無いものを残す（書き込み直後のレイ・画像アップロード中・setDoc 失敗時に消えるのを防ぐ） */
+            if (myUid && Array.isArray(state.userDefaultHostedVols)) {
+                state.userDefaultHostedVols.forEach(function (local) {
+                    if (!local || !local.id || local.id.indexOf('vol-user-') !== 0) return;
+                    if (idsFromServer[local.id]) return;
+                    var aid = String(local.authorId || local.hostedByUserId || '');
+                    if (aid !== String(myUid)) return;
+                    nextList.push(Object.assign({}, local));
+                });
+            }
             var idsInPosts = {};
-            var myUid = getMyUserId();
             nextList.forEach(function (raw) {
                 var v = Object.assign({}, raw);
                 v.id = v.id || raw.id;
@@ -349,14 +363,32 @@
             var uid = getMyUserId();
             if (!TF || !v || !v.id || !uid || !TF.postDocRef) return;
             var payload = Object.assign({}, v);
-            var latestName = getLatestProfileDisplayName();
-            payload.authorId = uid;
-            payload.authorName = latestName;
-            payload.authorPhotoUrl = String(state.profile.photoDataUrl || payload.authorPhotoUrl || '').trim();
-            payload.hostedByUserId = uid;
-            payload.chatWith = latestName;
-            payload.updatedAt = TF.serverTimestamp();
-            TF.setDoc(TF.postDocRef(v.id), payload, { merge: true }).catch(function () {});
+            function writePostDoc(body) {
+                var p = Object.assign({}, body);
+                var latestName = getLatestProfileDisplayName();
+                p.authorId = uid;
+                p.authorName = latestName;
+                p.authorPhotoUrl = String(state.profile.photoDataUrl || p.authorPhotoUrl || '').trim();
+                p.hostedByUserId = uid;
+                p.chatWith = latestName;
+                p.updatedAt = TF.serverTimestamp();
+                return TF.setDoc(TF.postDocRef(v.id), p, { merge: true }).catch(function () {});
+            }
+            var img = String(payload.image || '');
+            /** data URL のままだと 1MB 制限で setDoc 失敗し、リスナーで募集が消える。Storage に上げて URL のみ保存 */
+            if (img.indexOf('data:image/') === 0) {
+                teertabUploadDataUrlToStorage('volImages/' + v.id + '.jpg', img)
+                    .then(function (url) {
+                        payload.image = url;
+                        return writePostDoc(payload);
+                    })
+                    .catch(function () {
+                        payload.image = '';
+                        return writePostDoc(payload);
+                    });
+                return;
+            }
+            writePostDoc(payload);
         }
 
         function migrateLegacyPostsToFirestore(legacyCards) {
