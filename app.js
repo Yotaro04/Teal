@@ -391,6 +391,11 @@
                             state.auth.displayName = j.displayName;
                             persistTealAuthToStorage();
                         }
+                        if (j && typeof j.thanksCount === 'number' && isFinite(j.thanksCount)) {
+                            state.profile.thanksCount = Math.max(0, Math.floor(j.thanksCount));
+                            applyProfileToAccountDom();
+                            renderAccount();
+                        }
                     }
                     done(ok);
                 })
@@ -1175,6 +1180,25 @@
             return !!getLiveSyncBase() || firebaseSyncActive();
         }
 
+        /**
+         * HTTP 同期のみ: バンドル usersPublic の thanksCount をプロフィールに揃える。
+         * Firebase では users/{uid} が正であり、古い usersPublic で上書きすると残高が壊れてありがとうを送れなくなる。
+         */
+        function reconcileProfileThanksFromUsersPublic() {
+            if (!liveSyncEnabled()) return;
+            if (firebaseSyncActive()) return;
+            var myUid = getMyUserId();
+            if (!myUid || !state.usersPublic) return;
+            var pub = state.usersPublic[myUid];
+            if (!pub || typeof pub.thanksCount !== 'number' || !isFinite(pub.thanksCount)) return;
+            var srv = Math.max(0, Math.floor(pub.thanksCount));
+            var cur = Math.max(0, Math.floor(Number(state.profile.thanksCount) || 0));
+            if (srv === cur) return;
+            state.profile.thanksCount = srv;
+            savePersistedProfile();
+            applyProfileToAccountDom();
+        }
+
         function liveSyncRebuildMyHostedIds() {
             state.myHostedVolIds = {};
             var uid = getMyUserId();
@@ -1346,6 +1370,7 @@
                 return Object.assign({}, x);
             });
             mergeNotificationsIntoState();
+            reconcileProfileThanksFromUsersPublic();
             var dmTouched = liveSyncMergeDmThreads(data.dmThreads || {});
             liveSyncRebuildMyHostedIds();
             if (typeof window.__tfSyncSaveUserVolsFromState === 'function') {
@@ -1409,6 +1434,25 @@
             if (firebaseSyncActive() && TFn && n) {
                 TFn.runTransaction(TFn.db, function (transaction) {
                     return transaction.get(TFn.bundleRef).then(function (snap) {
+                        var data = snap.exists ? snap.data() : {};
+                        var usersPublic = Object.assign({}, (data && data.usersPublic) || {});
+                        if (n && n.type === 'thanks_granted') {
+                            var appUid = String(n.applicantUserId || '').trim();
+                            if (appUid) {
+                                var addAmt = 1;
+                                if (n.thanksAmount != null) {
+                                    var ta = Number(n.thanksAmount);
+                                    addAmt = isFinite(ta) && ta >= 1 ? Math.floor(ta) : 1;
+                                }
+                                var curPub = Object.assign({}, usersPublic[appUid] || {});
+                                var curTc =
+                                    typeof curPub.thanksCount === 'number' && isFinite(curPub.thanksCount)
+                                        ? Math.max(0, Math.floor(curPub.thanksCount))
+                                        : 10;
+                                curPub.thanksCount = curTc + addAmt;
+                                usersPublic[appUid] = curPub;
+                            }
+                        }
                         var arr;
                         if (!snap.exists) {
                             arr = [n];
@@ -1416,13 +1460,13 @@
                                 vols: {},
                                 notifications: arr,
                                 dmThreads: {},
-                                usersPublic: {}
+                                usersPublic: usersPublic
                             });
                         } else {
-                            arr = Array.isArray(snap.data().notifications) ? snap.data().notifications.slice() : [];
+                            arr = Array.isArray(data.notifications) ? data.notifications.slice() : [];
                             arr.unshift(n);
                             if (arr.length > 200) arr = arr.slice(0, 200);
-                            transaction.update(TFn.bundleRef, { notifications: arr });
+                            transaction.update(TFn.bundleRef, { notifications: arr, usersPublic: usersPublic });
                         }
                     });
                 }).catch(function () {});
@@ -2937,7 +2981,12 @@
                 return;
             }
             var orgUid = String(state.pendingThankOrganizerUserId || '').trim();
-            if (!orgUid || orgUid.indexOf('usr-') !== 0) {
+            if (!orgUid) {
+                showToast('募集者の同期アカウント情報がないため、ありがとうを送れません（同期ログインと募集のホスト情報が必要です）');
+                return;
+            }
+            var legacyHttpOnly = !!getLiveSyncBase() && !firebaseSyncActive();
+            if (legacyHttpOnly && orgUid.indexOf('usr-') !== 0) {
                 showToast('募集者の同期アカウント情報がないため、ありがとうを送れません（同期ログインと募集のホスト情報が必要です）');
                 return;
             }

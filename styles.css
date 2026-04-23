@@ -655,7 +655,7 @@
             align-items: stretch;
             gap: 0;
             padding: 0;
-            border-radius: 22px;
+            border-radius: 14px;
             overflow: hidden;
         }
         #home .home-card-media {
@@ -666,13 +666,12 @@
             min-width: 0;
             min-height: 0;
             overflow: hidden;
-            aspect-ratio: 16 / 9;
+            aspect-ratio: 2 / 1;
             border-radius: 0;
-            background: linear-gradient(135deg, rgba(66, 230, 210, 0.3), rgba(66, 230, 210, 0.08)), #202025;
+            background: #232327;
             background-size: cover;
             background-position: center;
             border: none;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.08);
         }
         /* ホーム縦型カード本文（行間調整前のシンプルな詰め方に戻す。.card は padding 0 のため本文側に左右余白を持たせる） */
         #home .home-card-body {

@@ -430,6 +430,18 @@ app.post('/api/notifications', function (req, res) {
         }
         n.organizerUserId = orgUid;
     }
+    if (n.type === 'thanks_granted') {
+        var appUidGrant = String(n.applicantUserId || '').trim();
+        if (appUidGrant && bundle.users[appUidGrant]) {
+            var addGrant =
+                n.thanksAmount != null ? Math.floor(Number(n.thanksAmount)) : 1;
+            if (!isFinite(addGrant) || addGrant < 1) addGrant = 1;
+            var uGrant = bundle.users[appUidGrant];
+            var tcGrant = Number(uGrant.thanksCount);
+            var baseGrant = isFinite(tcGrant) ? Math.floor(tcGrant) : 10;
+            uGrant.thanksCount = baseGrant + addGrant;
+        }
+    }
     bundle.notifications = bundle.notifications.filter(function (x) {
         return x && x.id !== n.id;
     });
